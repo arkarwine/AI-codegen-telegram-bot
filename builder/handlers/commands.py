@@ -226,7 +226,8 @@ def register_handlers(app: Any, service: BuilderService) -> None:
                 text,
             )
             await message.reply_text(
-                f"Created bot #{bot.id} @{bot.username or '-'}.\nUse /enable {bot.id} to deploy it."
+                f"Created and enabled bot #{bot.id} @{bot.username or '-'}.\n"
+                "Runtime Engine will hot-reload it."
             )
         except Exception as exc:
             await message.reply_text(f"Create failed: {exc}")
@@ -304,7 +305,10 @@ async def _continue_importschema(
     try:
         raw_json = await _schema_payload(message)
         bot = await service.import_schema(user, state["name"], state["token"], raw_json)
-        await message.reply_text(f"Imported bot #{bot.id} @{bot.username or '-'}.")
+        await message.reply_text(
+            f"Imported and enabled bot #{bot.id} @{bot.username or '-'}.\n"
+            "Runtime Engine will hot-reload it."
+        )
     except Exception as exc:
         await message.reply_text(f"Import failed: {exc}")
 

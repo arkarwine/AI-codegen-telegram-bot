@@ -42,7 +42,7 @@ class BuilderService:
     ) -> BotRecord:
         username = await self.validate_bot_token(token)
         schema = await self.ai.create_schema(prompt)
-        return await self.database.create_bot(user.id, name, username, token, schema, enabled=False)
+        return await self.database.create_bot(user.id, name, username, token, schema, enabled=True)
 
     async def get_user_bot(self, owner_id: int, bot_id: int) -> BotRecord:
         bot = await self.database.get_bot(bot_id)
@@ -79,7 +79,7 @@ class BuilderService:
         schema = normalize_bot_schema(schema)
         validate_bot_schema(schema)
         username = await self.validate_bot_token(token)
-        return await self.database.create_bot(user.id, name, username, token, schema, enabled=False)
+        return await self.database.create_bot(user.id, name, username, token, schema, enabled=True)
 
     async def validate_bot_token(self, token: str) -> str | None:
         """Start a short-lived Telegram bot client and return its username."""

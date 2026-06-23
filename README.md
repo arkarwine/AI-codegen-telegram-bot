@@ -57,7 +57,7 @@ Optional:
 /cancel
 ```
 
-`/createbot`, `/editbot`, and `/importschema` are step-by-step Telegram conversations. `/importschema` accepts pasted JSON or an uploaded `.json` document. Bot tokens are validated with Telegram before a bot is stored or enabled.
+`/createbot`, `/editbot`, and `/importschema` are step-by-step Telegram conversations. `/createbot` and `/importschema` enable the bot by default after token and schema validation. `/importschema` accepts pasted JSON or an uploaded `.json` document. Bot tokens are validated with Telegram before a bot is stored or enabled.
 
 ## Runtime Model
 
