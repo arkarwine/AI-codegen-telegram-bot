@@ -9,6 +9,26 @@ dependencies = [
     "kurigram>=2.2.0",
 ]
 
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = [
+    "builder*",
+    "database*",
+    "models*",
+    "plugins*",
+    "runtime*",
+    "schemas*",
+    "services*",
+    "utils*",
+]
+exclude = [
+    "examples*",
+    "systemd*",
+]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
