@@ -21,6 +21,7 @@ BUILTIN_STEP_TYPES: Final[set[str]] = {
     "set_variable",
     "get_variable",
     "database_query",
+    "data_transform",
     "http_request",
     "ai_chat",
     "scheduler",
@@ -73,6 +74,16 @@ BOT_SCHEMA_JSON_SCHEMA: Final[dict[str, Any]] = {
                                 "amount": {"type": "number"},
                                 "limit": {"type": "number"},
                                 "reply": {"type": "boolean"},
+                                "source_variable": {"type": "string"},
+                                "index_variable": {"type": "string"},
+                                "source": {},
+                                "pattern": {"type": "string"},
+                                "group": {},
+                                "default": {},
+                                "template": {"type": "string"},
+                                "choices": {"type": "array", "items": {}},
+                                "lines": {"type": "array", "items": {}},
+                                "empty": {"type": "string"},
                                 "event_type": {"type": "string"},
                                 "trigger": {"type": "string"},
                                 "equals": {},
@@ -291,6 +302,8 @@ def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[
         raise SchemaValidationError(f"{flow_id}[{index}] has unsupported step type: {step_type}")
     if step_type in {"send_message", "message"} and not isinstance(step.get("text"), str):
         raise SchemaValidationError(f"{flow_id}[{index}] message text is required")
+    if "when" in step:
+        _validate_condition_object(flow_id, index, step["when"], "when")
     if step_type == "buttons" and not isinstance(step.get("buttons"), list):
         raise SchemaValidationError(f"{flow_id}[{index}] buttons array is required")
     if step_type == "wait_for_input" and "variable" in step and not isinstance(step["variable"], str):
@@ -300,6 +313,8 @@ def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[
             raise SchemaValidationError(f"{flow_id}[{index}] condition requires variable or name")
     if step_type == "condition" and "scope" in step and step["scope"] not in {"session", "user", "global"}:
         raise SchemaValidationError(f"{flow_id}[{index}] condition scope is invalid")
+    if step_type == "condition":
+        _validate_condition_step(flow_id, index, step)
     if step_type == "set_variable":
         _validate_set_variable_step(flow_id, index, step)
     if step_type == "get_variable":
@@ -324,6 +339,47 @@ def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[
         raise SchemaValidationError(f"{flow_id}[{index}] edit_message requires text")
     if step_type == "database_query":
         _validate_database_step(flow_id, index, step)
+    if step_type == "data_transform":
+        _validate_data_transform_step(flow_id, index, step)
+
+
+def _validate_condition_step(flow_id: str, index: int, step: dict[str, Any]) -> None:
+    _validate_condition_object(flow_id, index, step, "condition")
+
+
+def _validate_condition_object(flow_id: str, index: int, condition: Any, label: str) -> None:
+    if not isinstance(condition, dict):
+        raise SchemaValidationError(f"{flow_id}[{index}] {label} must be an object")
+    if "all" in condition or "any" in condition:
+        key = "all" if "all" in condition else "any"
+        items = condition[key]
+        if not isinstance(items, list) or not items:
+            raise SchemaValidationError(f"{flow_id}[{index}] {label}.{key} must be a non-empty array")
+        for item_index, item in enumerate(items):
+            _validate_condition_object(flow_id, index, item, f"{label}.{key}[{item_index}]")
+        return
+    if "not" in condition:
+        _validate_condition_object(flow_id, index, condition["not"], f"{label}.not")
+        return
+    if not isinstance(condition.get("variable", condition.get("name")), str):
+        raise SchemaValidationError(f"{flow_id}[{index}] {label} requires variable or name")
+
+    operator = str(condition.get("operator", "equals"))
+    if operator not in {
+        "equals",
+        "not_equals",
+        "contains",
+        "not_contains",
+        "exists",
+        "missing",
+        "greater_than",
+        "less_than",
+        "in",
+        "regex",
+    }:
+        raise SchemaValidationError(f"{flow_id}[{index}] {label} operator is unsupported: {operator}")
+    if operator not in {"exists", "missing"} and "value" not in condition and "equals" not in condition:
+        raise SchemaValidationError(f"{flow_id}[{index}] {label} operator {operator} requires value")
 
 
 def _normalize_transition_targets(
@@ -364,3 +420,32 @@ def _validate_database_step(flow_id: str, index: int, step: dict[str, Any]) -> N
         raise SchemaValidationError(f"{flow_id}[{index}] database action {action} requires value")
     if action == "append" and "item" not in step and "value" not in step:
         raise SchemaValidationError(f"{flow_id}[{index}] database action append requires item or value")
+
+
+def _validate_data_transform_step(flow_id: str, index: int, step: dict[str, Any]) -> None:
+    action = str(step.get("action", "")).lower()
+    supported = {
+        "copy",
+        "get",
+        "template",
+        "regex_extract",
+        "replace_at",
+        "increment",
+        "decrement",
+        "append",
+        "remove",
+        "length",
+        "random_choice",
+        "line_match",
+        "contains",
+    }
+    if action not in supported:
+        raise SchemaValidationError(f"{flow_id}[{index}] unsupported data_transform action: {action}")
+    if not isinstance(step.get("save_as", step.get("name")), str):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform requires save_as or name")
+    if action == "regex_extract" and not isinstance(step.get("pattern"), str):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform regex_extract requires pattern")
+    if action == "replace_at" and "index" not in step and "index_variable" not in step:
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform replace_at requires index")
+    if action == "line_match" and not isinstance(step.get("lines"), list):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform line_match requires lines")

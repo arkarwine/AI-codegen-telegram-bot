@@ -39,6 +39,7 @@ class PluginRegistry:
             builtin.SetVariablePlugin(),
             builtin.GetVariablePlugin(),
             builtin.DatabaseQueryPlugin(),
+            builtin.DataTransformPlugin(),
             builtin.HttpRequestPlugin(),
             builtin.AiChatPlugin(),
             builtin.SchedulerPlugin(),

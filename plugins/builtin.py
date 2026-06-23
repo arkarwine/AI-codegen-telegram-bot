@@ -102,8 +102,7 @@ class ConditionPlugin:
     config_schema = {"type": "object", "required": ["variable"]}
 
     async def execute(self, config: dict[str, Any], context: PluginContext) -> dict[str, Any]:
-        value = await _read_variable(config, context)
-        matched = _matches(value, config)
+        matched = await _condition_matches_config(config, context)
         then_target = config.get("then")
         else_target = config.get("else")
         if matched and then_target:
@@ -219,6 +218,79 @@ class DatabaseQueryPlugin:
         if save_as:
             return {"data": {str(save_as): result}}
         return {}
+
+
+class DataTransformPlugin:
+    name = "data_transform"
+    version = "1.0.0"
+    config_schema = {"type": "object", "required": ["action"]}
+
+    async def execute(self, config: dict[str, Any], context: PluginContext) -> dict[str, Any]:
+        action = str(config.get("action", "")).lower()
+        data = context.session_data
+        result: Any
+
+        if action in {"copy", "get"}:
+            result = _transform_source(config, data)
+        elif action == "template":
+            result = _render(str(config.get("template", "")), data)
+        elif action == "regex_extract":
+            source = str(_transform_source(config, data) or "")
+            match = re.search(str(config.get("pattern", "")), source)
+            if match is None:
+                result = config.get("default", "")
+            else:
+                group = config.get("group", 1)
+                result = match.group(str(group) if isinstance(group, str) and not group.isdigit() else int(group))
+        elif action == "replace_at":
+            result = _replace_at(
+                _transform_source(config, data),
+                _transform_index(config, data),
+                config.get("item", config.get("value", "")),
+            )
+        elif action in {"increment", "decrement"}:
+            amount = _number(config.get("amount", 1))
+            if action == "decrement":
+                amount = -amount
+            result = _number(_transform_source(config, data)) + amount
+        elif action == "append":
+            values = _as_list(_transform_source(config, data))
+            values.append(config.get("item", config.get("value")))
+            result = values
+        elif action == "remove":
+            values = _as_list(_transform_source(config, data))
+            if "index" in config:
+                index = _transform_index(config, data)
+                if 0 <= index < len(values):
+                    values.pop(index)
+            else:
+                item = config.get("item", config.get("value"))
+                values = [value for value in values if value != item]
+            result = values
+        elif action == "length":
+            result = len(_transform_source(config, data) or "")
+        elif action == "random_choice":
+            import random
+
+            choices = _as_list(config.get("choices", _transform_source(config, data)))
+            result = random.choice(choices) if choices else config.get("default")
+        elif action == "line_match":
+            result = _line_match(
+                _transform_source(config, data),
+                config.get("lines", []),
+                str(config.get("empty", ".")),
+            )
+        elif action == "contains":
+            result = str(config.get("needle", config.get("value", ""))) in str(
+                _transform_source(config, data) or ""
+            )
+        else:
+            raise ValueError(f"unsupported data_transform action: {action}")
+
+        save_as = str(config.get("save_as", config.get("name", "result")))
+        if config.get("reply"):
+            await context.message.reply_text(_format_database_result(result))
+        return {"data": {save_as: result}}
 
 
 class HttpRequestPlugin:
@@ -387,6 +459,76 @@ def _format_database_result(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def _transform_source(config: dict[str, Any], data: dict[str, Any]) -> Any:
+    if "source_variable" in config:
+        return _lookup_path(data, str(config["source_variable"]))
+    if "variable" in config:
+        return _lookup_path(data, str(config["variable"]))
+    if "source" in config:
+        return config["source"]
+    if "value" in config:
+        return config["value"]
+    return None
+
+
+def _transform_index(config: dict[str, Any], data: dict[str, Any]) -> int:
+    raw_index = config.get("index")
+    if raw_index is None and "index_variable" in config:
+        raw_index = _lookup_path(data, str(config["index_variable"]))
+    if raw_index is None:
+        raw_index = 0
+    text = str(raw_index)
+    match = re.search(r"-?\d+", text)
+    if match is None:
+        return 0
+    return int(match.group(0))
+
+
+def _replace_at(source: Any, index: int, item: Any) -> Any:
+    if isinstance(source, list):
+        values = list(source)
+        if 0 <= index < len(values):
+            values[index] = item
+        return values
+    text = str(source or "")
+    if 0 <= index < len(text):
+        return text[:index] + str(item) + text[index + 1 :]
+    return text
+
+
+def _number(value: Any) -> int | float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    text = str(value or "0")
+    return float(text) if "." in text else int(text)
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _line_match(source: Any, lines: Any, empty: str) -> dict[str, Any]:
+    values = list(source) if isinstance(source, list) else list(str(source or ""))
+    if not isinstance(lines, list):
+        return {"matched": False, "value": "", "line": []}
+    for line in lines:
+        if not isinstance(line, list) or not line:
+            continue
+        indexes = [int(index) for index in line if isinstance(index, int | float) or str(index).isdigit()]
+        if not indexes or any(index < 0 or index >= len(values) for index in indexes):
+            continue
+        first = values[indexes[0]]
+        if str(first) == empty:
+            continue
+        if all(values[index] == first for index in indexes):
+            return {"matched": True, "value": first, "line": indexes}
+    return {"matched": False, "value": "", "line": []}
+
+
 async def _read_variable(config: dict[str, Any], context: PluginContext) -> Any:
     name = str(config["variable"] if "variable" in config else config["name"])
     scope = str(config.get("scope", "session"))
@@ -398,6 +540,23 @@ async def _read_variable(config: dict[str, Any], context: PluginContext) -> Any:
         name,
         context.user_id if scope == "user" else None,
     )
+
+
+async def _condition_matches_config(config: dict[str, Any], context: PluginContext) -> bool:
+    if "all" in config:
+        conditions = config.get("all", [])
+        return isinstance(conditions, list) and all(
+            [await _condition_matches_config(item, context) for item in conditions if isinstance(item, dict)]
+        )
+    if "any" in config:
+        conditions = config.get("any", [])
+        return isinstance(conditions, list) and any(
+            [await _condition_matches_config(item, context) for item in conditions if isinstance(item, dict)]
+        )
+    if "not" in config and isinstance(config["not"], dict):
+        return not await _condition_matches_config(config["not"], context)
+    value = await _read_variable(config, context)
+    return _matches(value, config)
 
 
 def _lookup_path(data: dict[str, Any], path: str) -> Any:

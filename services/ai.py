@@ -77,6 +77,8 @@ Conditions:
 - Use variable/name plus operator/value, or all/any/not.
 - Operators: equals, not_equals, contains, exists, missing, greater_than,
   less_than, in, regex.
+- Operators equals, not_equals, contains, greater_than, less_than, in, and regex
+  require value or equals. Only exists and missing may omit value.
 
 Step contracts:
 - message/send_message: requires text.
@@ -104,7 +106,19 @@ Step contracts:
 - broadcast: requires text and should be admin_only guarded.
 - scheduler: requires delay_seconds and text.
 - ai_chat: requires prompt; optional save_as and reply. Use save_as when later
-  steps need the AI result.
+  steps need the AI result. Never use ai_chat as deterministic app logic, game
+  rules, validation, board updates, counters, scoring, database mutation, math,
+  or structured state transformation. Use plugins, conditions, variables, and
+  database_query for state. ai_chat is for conversational/help text only.
+- data_transform: safe deterministic data operations without code. Requires
+  action and save_as/name. Actions: copy/get, template, regex_extract,
+  replace_at, increment, decrement, append, remove, length, random_choice,
+  line_match, contains. Use source_variable for session paths, source/value for
+  literals, index/index_variable for replace_at, pattern/group/default for
+  regex_extract, choices for random_choice, lines/empty for line_match.
+  Use data_transform for state updates, counters, parsing callback indexes,
+  board/string/list updates, score checks, lightweight calculations, and
+  reusable business logic.
 - http_request: requires url; optional timeout and save_as.
 - edit_message: requires text.
 - delete_message: no required fields.
@@ -120,7 +134,8 @@ Production patterns:
 - Quiz/game: button-based choices or board positions, state variables, result
   branches, replay button. Never say the logic is "basic" or external. Do not
   promise professional game logic unless the schema actually tracks state,
-  validates moves, updates results, and handles replay.
+  validates moves, updates results, and handles replay. Use data_transform,
+  condition, database_query, and buttons for deterministic rules.
 - Admin broadcast: /admin or /broadcast, admin_only, broadcast, analytics.
 """.strip()
 
@@ -272,6 +287,9 @@ def _repair_prompt(
                 "Use type buttons for messages with inline keyboards; do not attach buttons to send_message.",
                 "Use button color/style fields for important callback buttons.",
                 "Every step must have a valid type.",
+                "Conditions using equals/not_equals/contains/regex/comparison operators require value.",
+                "Do not use ai_chat for deterministic state updates, game logic, board updates, or scoring.",
+                "Use data_transform, condition, and database_query for deterministic logic.",
                 "set_variable requires name and value; do not use save_as on set_variable.",
                 "database_query set/upsert/save requires key and value.",
                 "Prefer next_flow when jumping to another flow.",
@@ -328,6 +346,7 @@ def _refinement_focus(pass_number: int) -> list[str]:
         [
             "Improve Telegram-native UX: colored button styles, callback triggers, finite-choice buttons.",
             "Tighten transitions, conditions, validation prompts, confirmations, and error handling.",
+            "Replace ai_chat state/game logic with data_transform, condition, and database_query.",
             "Remove placeholder language and make the bot feel production-ready.",
         ],
     ]

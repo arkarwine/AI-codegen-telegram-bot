@@ -332,6 +332,8 @@ def _condition_matches(condition: Any, data: dict[str, Any]) -> bool:
             return value != expected
         if operator == "contains":
             return str(expected).lower() in str(value).lower()
+        if operator == "not_contains":
+            return str(expected).lower() not in str(value).lower()
         if operator == "exists":
             return value not in (None, "")
         if operator == "missing":
@@ -361,10 +363,26 @@ def _render_config(value: Any, data: dict[str, Any]) -> Any:
 
 def _render_text(template: str, data: dict[str, Any]) -> str:
     def replace(match: re.Match[str]) -> str:
-        value = _lookup_data(data, match.group(1).strip())
+        value = _template_value(match.group(1).strip(), data)
         return "" if value is None else str(value)
 
     return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", replace, template)
+
+
+def _template_value(expression: str, data: dict[str, Any]) -> Any:
+    match = re.fullmatch(r"(.+?)\s*\|\s*default\((.*)\)", expression)
+    if match is None:
+        return _lookup_data(data, expression)
+    value = _lookup_data(data, match.group(1).strip())
+    if value not in (None, ""):
+        return value
+    return _template_default(match.group(2).strip())
+
+
+def _template_default(raw_value: str) -> str:
+    if len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in {"'", '"'}:
+        return raw_value[1:-1]
+    return raw_value
 
 
 def _lookup_data(data: dict[str, Any], path: str) -> Any:

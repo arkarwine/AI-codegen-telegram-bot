@@ -72,9 +72,11 @@ The runtime writes a heartbeat snapshot to SQLite for `/runtime` and records per
 
 The Runtime Engine supports command, text, button, callback, regex, and catch-all triggers. Flows may be entered by triggers or jumped to by other steps with `next`, `next_flow`, `next_step`, `on_success`, or `on_failure`.
 
-Steps can use `when` conditions, pause with `wait_for_input`, store session/user/global variables with `set_variable`, render values with `{{name}}`, `{{user.name}}`, `{{global.name}}`, and use event helpers such as `{{event.text}}` and `{{telegram_user.id}}`.
+Steps can use `when` conditions, pause with `wait_for_input`, store session/user/global variables with `set_variable`, render values with `{{name}}`, `{{user.name}}`, `{{global.name}}`, and use event helpers such as `{{event.text}}`, `{{event.callback_data}}`, and `{{telegram_user.id}}`. Template defaults use `{{path | default('fallback text')}}`.
 
-Supported action plugins include messages, buttons, edit/delete message, wait, conditions, scoped variables, safe key/value storage, HTTP GET, Gemini chat, scheduler, broadcast, admin-only guards, and analytics.
+Supported action plugins include messages, buttons, edit/delete message, wait, conditions, scoped variables, safe key/value storage, safe data transforms, HTTP GET, Gemini chat, scheduler, broadcast, admin-only guards, and analytics.
+
+Use `data_transform` for reusable deterministic logic without code: template rendering, regex extraction, index replacement, increments, append/remove, length, random choice, contains checks, and line/sequence matching.
 
 Inline button objects may include `color`, `colour`, or `style` metadata such as `primary`, `success`, `danger`, or `warning`. Telegram does not support true per-button background colors, so the runtime renders the color intent as a colored emoji marker in the button label.
 
