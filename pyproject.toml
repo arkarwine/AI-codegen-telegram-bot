@@ -7,6 +7,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "google-genai>=1.0.0",
     "kurigram>=2.2.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [build-system]
