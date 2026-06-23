@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,15 @@ from dotenv import load_dotenv
 
 
 load_dotenv()
+
+
+def configure_logging(service_name: str) -> None:
+    """Configure concise stdout logging for systemd and terminal runs."""
+
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format=f"%(asctime)s %(levelname)s {service_name}: %(message)s",
+    )
 
 
 @dataclass(frozen=True, slots=True)

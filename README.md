@@ -19,6 +19,7 @@ sudo -u botbuilder python3.12 -m venv .venv
 sudo -u botbuilder .venv/bin/pip install -e .
 sudo -u botbuilder cp .env.sample .env
 sudo -u botbuilder nano .env
+sudo -u botbuilder mkdir -p sessions
 sudo cp systemd/botbuilder.service /etc/systemd/system/
 sudo cp systemd/runtimeengine.service /etc/systemd/system/
 sudo systemctl daemon-reload
