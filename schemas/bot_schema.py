@@ -141,6 +141,7 @@ def normalize_bot_schema(schema: dict[str, Any]) -> dict[str, Any]:
         for step in steps:
             if not isinstance(step, dict):
                 continue
+            _normalize_step_fields(step)
             if step.get("type") is not None:
                 _normalize_transition_targets(step, flow_ids, step_ids)
                 continue
@@ -154,6 +155,24 @@ def normalize_bot_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 step["type"] = "analytics"
             _normalize_transition_targets(step, flow_ids, step_ids)
     return normalized
+
+
+def _normalize_step_fields(step: dict[str, Any]) -> None:
+    step_type = step.get("type")
+    if step_type == "set_variable":
+        if not isinstance(step.get("name"), str) and isinstance(step.get("save_as"), str):
+            step["name"] = step.pop("save_as")
+        if "value" not in step and isinstance(step.get("name"), str):
+            step["value"] = True
+    if step_type == "database_query":
+        action = str(step.get("action", "set" if "value" in step else "get"))
+        if action in {"set", "upsert", "save"} and not isinstance(step.get("key"), str):
+            if isinstance(step.get("save_as"), str):
+                step["key"] = step["save_as"]
+            elif isinstance(step.get("name"), str):
+                step["key"] = step["name"]
+            elif isinstance(step.get("variable"), str):
+                step["key"] = step["variable"]
 
 
 def validate_bot_schema(schema: dict[str, Any], allowed_step_types: set[str] | None = None) -> None:

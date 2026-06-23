@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from json import JSONDecodeError
 from typing import Any, Literal
 
@@ -324,11 +325,11 @@ class AiSchemaService:
     model = "gemini-3.1-flash-lite"
 
     async def create_schema(self, user_prompt: str) -> dict[str, Any]:
-        return await self._generate(user_prompt)
+        return await self._generate(user_prompt, allow_fallback=True)
 
     async def modify_schema(self, schema: dict[str, Any], user_prompt: str) -> dict[str, Any]:
         payload = json.dumps({"existing_schema": schema, "request": user_prompt})
-        return await self._generate(payload)
+        return await self._generate(payload, allow_fallback=False)
 
     def explain_schema(self, schema: dict[str, Any]) -> str:
         validate_bot_schema(schema)
@@ -347,7 +348,7 @@ class AiSchemaService:
             suggestions.append("Add analytics steps for important conversions.")
         return suggestions or ["Schema is already concise and deployable."]
 
-    async def _generate(self, contents: str) -> dict[str, Any]:
+    async def _generate(self, contents: str, allow_fallback: bool) -> dict[str, Any]:
         os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
         from google import genai
         from google.genai import types
@@ -379,6 +380,10 @@ class AiSchemaService:
                     break
                 current_contents = _repair_prompt(contents, parsed, exc)
 
+        if allow_fallback:
+            fallback = _fallback_schema(contents)
+            validate_bot_schema(fallback)
+            return fallback
         raise ValueError(f"Gemini returned an invalid bot schema: {validation_error}") from validation_error
 
 
@@ -404,6 +409,60 @@ def _repair_prompt(
         },
         ensure_ascii=False,
     )
+
+
+def _fallback_schema(user_prompt: str) -> dict[str, Any]:
+    name = _fallback_name(user_prompt)
+    return {
+        "metadata": {
+            "name": name,
+            "description": "Safe fallback schema generated after AI validation failed.",
+        },
+        "permissions": {},
+        "database": {},
+        "variables": {},
+        "flows": [
+            {
+                "id": "start",
+                "trigger": "/start",
+                "steps": [
+                    {
+                        "type": "message",
+                        "text": f"{name} is ready. The requested advanced schema could not be generated safely, so this fallback bot was created.",
+                    },
+                    {
+                        "type": "buttons",
+                        "text": "Choose an option:",
+                        "buttons": [
+                            {"text": "Help", "value": "help"},
+                            {"text": "Restart", "value": "/start"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "id": "help",
+                "trigger": {"type": "callback", "value": "help"},
+                "steps": [
+                    {
+                        "type": "message",
+                        "text": "Edit this bot with /editbot and describe the behavior you want in smaller pieces.",
+                    }
+                ],
+            },
+        ],
+    }
+
+
+def _fallback_name(user_prompt: str) -> str:
+    words = re.findall(r"[A-Za-z0-9]+", user_prompt)
+    if not words:
+        return "Generated Bot"
+    ignored = {"create", "a", "an", "the", "bot", "telegram", "for", "with"}
+    title_words = [word for word in words[:8] if word.lower() not in ignored]
+    if not title_words:
+        title_words = words[:3]
+    return " ".join(title_words[:4]).title()[:60]
 
 
 AiAction = Literal["create", "modify", "explain", "validate", "suggest"]

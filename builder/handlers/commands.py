@@ -9,6 +9,9 @@ from typing import Any
 from builder.services.bot_service import BuilderService
 
 
+MAX_SCHEMA_UPLOAD_BYTES = 512_000
+
+
 HELP = """
 Commands
 /createbot
@@ -179,7 +182,7 @@ def register_handlers(app: Any, service: BuilderService) -> None:
         except Exception as exc:
             await message.reply_text(f"Runtime status failed: {exc}")
 
-    @app.on_message(filters.text)
+    @app.on_message(filters.text | filters.document)
     async def continue_createbot(_: Any, message: Any) -> None:
         if message.text and message.text.startswith("/"):
             return
@@ -278,25 +281,62 @@ async def _continue_importschema(
 ) -> None:
     state = sessions[message.from_user.id]
     text = str(message.text or "").strip()
-    if not text:
-        await message.reply_text("Please send a value, or /cancel.")
-        return
     if state["step"] == "name":
+        if not text:
+            await message.reply_text("Please send a bot name, or /cancel.")
+            return
         state["name"] = text
         state["step"] = "token"
         await message.reply_text("Bot token from BotFather?")
         return
     if state["step"] == "token":
+        if not text:
+            await message.reply_text("Please send a bot token, or /cancel.")
+            return
         state["token"] = text
         state["step"] = "schema"
-        await message.reply_text("Paste the JSON schema.")
+        await message.reply_text("Paste the JSON schema or upload a .json file.")
         return
 
     user = await service.user(message.from_user.id, message.from_user.username)
     sessions.pop(message.from_user.id, None)
     await message.reply_text("Validating token and importing schema...")
     try:
-        bot = await service.import_schema(user, state["name"], state["token"], text)
+        raw_json = await _schema_payload(message)
+        bot = await service.import_schema(user, state["name"], state["token"], raw_json)
         await message.reply_text(f"Imported bot #{bot.id} @{bot.username or '-'}.")
     except Exception as exc:
         await message.reply_text(f"Import failed: {exc}")
+
+
+async def _schema_payload(message: Any) -> str:
+    if getattr(message, "document", None) is None:
+        text = str(message.text or "").strip()
+        if not text:
+            raise ValueError("Paste JSON or upload a .json file.")
+        return text
+
+    document = message.document
+    file_name = str(getattr(document, "file_name", "") or "")
+    file_size = int(getattr(document, "file_size", 0) or 0)
+    if file_name and not file_name.lower().endswith(".json"):
+        raise ValueError("Schema upload must be a .json file.")
+    if file_size > MAX_SCHEMA_UPLOAD_BYTES:
+        raise ValueError("Schema file is too large.")
+
+    downloaded = await message.download(in_memory=True)
+    try:
+        downloaded.seek(0)
+        content = downloaded.read()
+    finally:
+        downloaded.close()
+
+    if isinstance(content, str):
+        text = content
+    else:
+        if len(content) > MAX_SCHEMA_UPLOAD_BYTES:
+            raise ValueError("Schema file is too large.")
+        text = content.decode("utf-8")
+    if not text.strip():
+        raise ValueError("Schema file is empty.")
+    return text
