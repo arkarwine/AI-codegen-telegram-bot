@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -39,7 +40,7 @@ async def run_builder_bot() -> None:
         await app.start()
         started = True
         logger.info("builder bot is running")
-        await __import__("asyncio").Event().wait()
+        await asyncio.Event().wait()
     finally:
         logger.info("stopping")
         if started:

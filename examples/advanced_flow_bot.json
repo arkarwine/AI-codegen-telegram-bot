@@ -1,0 +1,98 @@
+{
+  "metadata": {
+    "name": "Advanced Intake Bot",
+    "description": "Shows waits, scoped variables, conditions, transitions, callbacks, and analytics."
+  },
+  "permissions": {
+    "admin_ids": [123456789]
+  },
+  "database": {
+    "collections": {
+      "tickets": {
+        "scope": "global",
+        "description": "Support ticket records keyed by Telegram user id."
+      }
+    }
+  },
+  "variables": {
+    "lead_status": "new"
+  },
+  "flows": [
+    {
+      "id": "start",
+      "trigger": "/start",
+      "steps": [
+        { "type": "message", "text": "Welcome. What can we help with?" },
+        {
+          "type": "buttons",
+          "text": "Choose a path:",
+          "buttons": [
+            { "text": "Support", "value": "support" },
+            { "text": "Pricing", "value": "pricing" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "support",
+      "trigger": { "type": "callback", "value": "support" },
+      "steps": [
+        { "type": "wait_for_input", "prompt": "Describe your issue.", "variable": "issue" },
+        { "type": "set_variable", "scope": "user", "name": "last_issue", "value": "{{issue}}" },
+        {
+          "type": "database_query",
+          "action": "set",
+          "collection": "tickets",
+          "scope": "global",
+          "key": "{{telegram_user.id}}",
+          "value": {
+            "issue": "{{issue}}",
+            "status": "open",
+            "username": "{{telegram_user.username}}"
+          }
+        },
+        { "type": "analytics", "event_type": "support_request" },
+        {
+          "type": "condition",
+          "variable": "issue",
+          "operator": "contains",
+          "value": "urgent",
+          "then": "urgent_support",
+          "else": "normal_support"
+        }
+      ]
+    },
+    {
+      "id": "urgent_support",
+      "steps": [
+        { "type": "message", "text": "Priority noted. A human should review this soon." }
+      ]
+    },
+    {
+      "id": "normal_support",
+      "steps": [
+        { "type": "message", "text": "Thanks. We saved your request: {{issue}}" }
+      ]
+    },
+    {
+      "id": "pricing",
+      "trigger": { "type": "callback", "value": "pricing" },
+      "steps": [
+        { "type": "message", "text": "Plans start at $29/month." },
+        { "type": "analytics", "event_type": "pricing_viewed" }
+      ]
+    },
+    {
+      "id": "admin_broadcast",
+      "trigger": "/broadcast",
+      "steps": [
+        {
+          "type": "admin_only",
+          "telegram_ids": [123456789],
+          "denied_text": "This command is for admins only."
+        },
+        { "type": "broadcast", "text": "New update from {{telegram_user.username}}." }
+      ]
+    }
+  ]
+}

@@ -56,6 +56,45 @@ Required environment variables:
 
 Schemas are validated before storage and again before runtime execution. Step execution is restricted to the plugin registry.
 
+## Flow Features
+
+The Runtime Engine supports command, text, button, callback, regex, and catch-all triggers. Flows may be entered by triggers or jumped to by other steps with `next`, `next_flow`, `next_step`, `on_success`, or `on_failure`.
+
+Steps can use `when` conditions, pause with `wait_for_input`, store session/user/global variables with `set_variable`, render values with `{{name}}`, `{{user.name}}`, `{{global.name}}`, and use event helpers such as `{{event.text}}` and `{{telegram_user.id}}`.
+
+Supported action plugins include messages, buttons, edit/delete message, wait, conditions, scoped variables, safe key/value storage, HTTP GET, Gemini chat, scheduler, broadcast, admin-only guards, and analytics.
+
+## Database Interactions
+
+Schemas can use `database_query` for persistent SQLite records without raw SQL. Data is stored by `collection`, `scope`, and `key`.
+
+Supported actions:
+
+- `set`, `upsert`, `save`: create or replace a record with `key` and `value`
+- `get`, `read`: read one record by `key`
+- `delete`: delete one record by `key`
+- `list`: list records in a collection, with optional `limit`
+- `count`: count records in a collection
+- `exists`: check whether a record exists
+- `increment`: increment a numeric record by optional `amount`
+- `append`: append `item` or `value` to an array record
+
+Example:
+
+```json
+{
+  "type": "database_query",
+  "action": "set",
+  "collection": "leads",
+  "scope": "global",
+  "key": "{{telegram_user.id}}",
+  "value": {
+    "name": "{{name}}",
+    "email": "{{email}}"
+  }
+}
+```
+
 ## Examples
 
 See:
@@ -63,6 +102,8 @@ See:
 - `examples/support_bot.json`
 - `examples/lead_capture_bot.json`
 - `examples/faq_bot.json`
+- `examples/advanced_flow_bot.json`
+- `examples/database_lead_bot.json`
 
 ## Custom Plugins
 

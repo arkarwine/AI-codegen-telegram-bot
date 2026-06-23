@@ -1,0 +1,79 @@
+{
+  "metadata": {
+    "name": "Database Lead Bot",
+    "description": "Collects leads, stores them in SQLite, and lets admins inspect counts."
+  },
+  "permissions": {
+    "admin_ids": [123456789]
+  },
+  "database": {
+    "collections": {
+      "leads": {
+        "scope": "global",
+        "description": "One lead record per Telegram user id."
+      }
+    }
+  },
+  "flows": [
+    {
+      "id": "start",
+      "trigger": "/start",
+      "steps": [
+        { "type": "wait_for_input", "prompt": "What is your name?", "variable": "name" },
+        { "type": "wait_for_input", "prompt": "What email should we use?", "variable": "email" },
+        {
+          "type": "database_query",
+          "action": "set",
+          "collection": "leads",
+          "scope": "global",
+          "key": "{{telegram_user.id}}",
+          "value": {
+            "telegram_id": "{{telegram_user.id}}",
+            "username": "{{telegram_user.username}}",
+            "name": "{{name}}",
+            "email": "{{email}}",
+            "status": "new"
+          }
+        },
+        { "type": "analytics", "event_type": "lead_saved" },
+        { "type": "message", "text": "Thanks, {{name}}. Your details were saved." }
+      ]
+    },
+    {
+      "id": "admin_lead_count",
+      "trigger": "/leadcount",
+      "steps": [
+        {
+          "type": "admin_only",
+          "telegram_ids": [123456789],
+          "denied_text": "This command is for admins only."
+        },
+        {
+          "type": "database_query",
+          "action": "count",
+          "collection": "leads",
+          "save_as": "lead_count"
+        },
+        { "type": "message", "text": "Total leads: {{lead_count}}" }
+      ]
+    },
+    {
+      "id": "admin_list_leads",
+      "trigger": "/leads",
+      "steps": [
+        {
+          "type": "admin_only",
+          "telegram_ids": [123456789],
+          "denied_text": "This command is for admins only."
+        },
+        {
+          "type": "database_query",
+          "action": "list",
+          "collection": "leads",
+          "limit": 10,
+          "reply": true
+        }
+      ]
+    }
+  ]
+}

@@ -60,10 +60,32 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS bot_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    collection TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    owner_id TEXT NOT NULL DEFAULT '',
+    record_key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(bot_id, collection, scope, owner_id, record_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_records_lookup
+ON bot_records(bot_id, collection, scope, owner_id);
+
 CREATE TRIGGER IF NOT EXISTS bots_touch_updated_at
 AFTER UPDATE ON bots
 BEGIN
     UPDATE bots SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS bot_records_touch_updated_at
+AFTER UPDATE ON bot_records
+BEGIN
+    UPDATE bot_records SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 """
 

@@ -47,9 +47,10 @@ def register_handlers(app: Any, service: BuilderService) -> None:
 
     @app.on_message(filters.command("editbot"))
     async def editbot(_: Any, message: Any) -> None:
+        user = await service.user(message.from_user.id, message.from_user.username)
         try:
             bot_id, instruction = _payload(message).split("|", 1)
-            await service.edit_bot(int(bot_id), instruction.strip())
+            await service.edit_bot(user.id, int(bot_id), instruction.strip())
             await message.reply_text("Schema updated and queued for hot reload.")
         except Exception as exc:
             await message.reply_text(f"Edit failed: {exc}")
@@ -57,8 +58,11 @@ def register_handlers(app: Any, service: BuilderService) -> None:
     @app.on_message(filters.command("deletebot"))
     async def deletebot(_: Any, message: Any) -> None:
         user = await service.user(message.from_user.id, message.from_user.username)
-        deleted = await service.database.delete_bot(int(_payload(message)), user.id)
-        await message.reply_text("Deleted." if deleted else "Bot not found.")
+        try:
+            deleted = await service.database.delete_bot(int(_payload(message)), user.id)
+            await message.reply_text("Deleted." if deleted else "Bot not found.")
+        except Exception as exc:
+            await message.reply_text(f"Delete failed: {exc}")
 
     @app.on_message(filters.command("mybots"))
     async def mybots(_: Any, message: Any) -> None:
@@ -69,30 +73,50 @@ def register_handlers(app: Any, service: BuilderService) -> None:
 
     @app.on_message(filters.command("viewschema"))
     async def viewschema(_: Any, message: Any) -> None:
-        bot = await service.database.get_bot(int(_payload(message)))
-        await message.reply_text(_chunk(bot.schema_json))
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            bot = await service.get_user_bot(user.id, int(_payload(message)))
+            await message.reply_text(_chunk(bot.schema_json))
+        except Exception as exc:
+            await message.reply_text(f"View failed: {exc}")
 
     @app.on_message(filters.command("enable"))
     async def enable(_: Any, message: Any) -> None:
-        await service.database.set_bot_enabled(int(_payload(message)), True)
-        await message.reply_text("Enabled. Runtime Engine will hot-reload it.")
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            await service.set_bot_enabled(user.id, int(_payload(message)), True)
+            await message.reply_text("Enabled. Runtime Engine will hot-reload it.")
+        except Exception as exc:
+            await message.reply_text(f"Enable failed: {exc}")
 
     @app.on_message(filters.command("disable"))
     async def disable(_: Any, message: Any) -> None:
-        await service.database.set_bot_enabled(int(_payload(message)), False)
-        await message.reply_text("Disabled. Runtime Engine will stop it.")
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            await service.set_bot_enabled(user.id, int(_payload(message)), False)
+            await message.reply_text("Disabled. Runtime Engine will stop it.")
+        except Exception as exc:
+            await message.reply_text(f"Disable failed: {exc}")
 
     @app.on_message(filters.command("analytics"))
     async def analytics(_: Any, message: Any) -> None:
-        counts = await service.database.analytics_counts(int(_payload(message)))
-        await message.reply_text(json.dumps(counts, indent=2))
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            counts = await service.analytics_counts(user.id, int(_payload(message)))
+            await message.reply_text(json.dumps(counts, indent=2))
+        except Exception as exc:
+            await message.reply_text(f"Analytics failed: {exc}")
 
     @app.on_message(filters.command("exportschema"))
     async def exportschema(_: Any, message: Any) -> None:
-        bot = await service.database.get_bot(int(_payload(message)))
-        document = BytesIO(bot.schema_json.encode("utf-8"))
-        document.name = f"bot-{bot.id}-schema.json"
-        await message.reply_document(document)
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            bot = await service.get_user_bot(user.id, int(_payload(message)))
+            document = BytesIO(bot.schema_json.encode("utf-8"))
+            document.name = f"bot-{bot.id}-schema.json"
+            await message.reply_document(document)
+        except Exception as exc:
+            await message.reply_text(f"Export failed: {exc}")
 
     @app.on_message(filters.command("importschema"))
     async def importschema(_: Any, message: Any) -> None:
@@ -106,7 +130,10 @@ def register_handlers(app: Any, service: BuilderService) -> None:
 
 
 def _payload(message: Any) -> str:
-    return str(message.text).split(maxsplit=1)[1].strip()
+    parts = str(message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        raise ValueError("Missing command arguments.")
+    return parts[1].strip()
 
 
 def _chunk(text: str, limit: int = 3900) -> str:

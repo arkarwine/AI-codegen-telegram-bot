@@ -10,7 +10,7 @@ from typing import Any
 import aiosqlite
 
 from database.migrations import migrate
-from models.entities import AnalyticsEvent, BotRecord, SessionRecord, User
+from models.entities import BotRecord, SessionRecord, User
 
 
 class Database:
@@ -145,6 +145,202 @@ class Database:
         )
         return {str(row["event_type"]): int(row["count"]) for row in rows}
 
+    async def list_bot_user_ids(self, bot_id: int) -> list[int]:
+        rows = await self._fetchall(
+            "SELECT DISTINCT user_id FROM sessions WHERE bot_id = ? ORDER BY user_id",
+            (bot_id,),
+        )
+        return [int(row["user_id"]) for row in rows]
+
+    async def get_setting(self, key: str) -> Any:
+        cursor = await self._conn().execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return json.loads(str(row["value"]))
+
+    async def set_setting(self, key: str, value: Any) -> None:
+        await self._conn().execute(
+            """
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, json.dumps(value)),
+        )
+        await self._conn().commit()
+
+    async def get_variable(
+        self,
+        bot_id: int,
+        scope: str,
+        name: str,
+        user_id: int | None = None,
+    ) -> Any:
+        return await self.get_setting(_variable_key(bot_id, scope, name, user_id))
+
+    async def set_variable(
+        self,
+        bot_id: int,
+        scope: str,
+        name: str,
+        value: Any,
+        user_id: int | None = None,
+    ) -> None:
+        await self.set_setting(_variable_key(bot_id, scope, name, user_id), value)
+
+    async def list_variables(
+        self,
+        bot_id: int,
+        scope: str,
+        user_id: int | None = None,
+    ) -> dict[str, Any]:
+        prefix = _variable_key_prefix(bot_id, scope, user_id)
+        rows = await self._fetchall(
+            "SELECT key, value FROM settings WHERE key LIKE ? ORDER BY key",
+            (prefix + "%",),
+        )
+        values: dict[str, Any] = {}
+        for row in rows:
+            name = str(row["key"])[len(prefix) :]
+            values[name] = json.loads(str(row["value"]))
+        return values
+
+    async def upsert_record(
+        self,
+        bot_id: int,
+        collection: str,
+        key: str,
+        value: Any,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> None:
+        owner_id = _record_owner(scope, user_id)
+        await self._conn().execute(
+            """
+            INSERT INTO bot_records (bot_id, collection, scope, owner_id, record_key, value_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bot_id, collection, scope, owner_id, record_key)
+            DO UPDATE SET value_json = excluded.value_json
+            """,
+            (bot_id, collection, scope, owner_id, key, json.dumps(value)),
+        )
+        await self._conn().commit()
+
+    async def get_record(
+        self,
+        bot_id: int,
+        collection: str,
+        key: str,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> Any:
+        owner_id = _record_owner(scope, user_id)
+        cursor = await self._conn().execute(
+            """
+            SELECT value_json FROM bot_records
+            WHERE bot_id = ? AND collection = ? AND scope = ? AND owner_id = ? AND record_key = ?
+            """,
+            (bot_id, collection, scope, owner_id, key),
+        )
+        row = await cursor.fetchone()
+        return None if row is None else json.loads(str(row["value_json"]))
+
+    async def delete_record(
+        self,
+        bot_id: int,
+        collection: str,
+        key: str,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> bool:
+        owner_id = _record_owner(scope, user_id)
+        cursor = await self._conn().execute(
+            """
+            DELETE FROM bot_records
+            WHERE bot_id = ? AND collection = ? AND scope = ? AND owner_id = ? AND record_key = ?
+            """,
+            (bot_id, collection, scope, owner_id, key),
+        )
+        await self._conn().commit()
+        return cursor.rowcount > 0
+
+    async def list_records(
+        self,
+        bot_id: int,
+        collection: str,
+        scope: str = "global",
+        user_id: int | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        owner_id = _record_owner(scope, user_id)
+        rows = await self._fetchall(
+            """
+            SELECT record_key, value_json, created_at, updated_at FROM bot_records
+            WHERE bot_id = ? AND collection = ? AND scope = ? AND owner_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (bot_id, collection, scope, owner_id, max(1, min(limit, 200))),
+        )
+        return [
+            {
+                "key": str(row["record_key"]),
+                "value": json.loads(str(row["value_json"])),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    async def count_records(
+        self,
+        bot_id: int,
+        collection: str,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> int:
+        owner_id = _record_owner(scope, user_id)
+        cursor = await self._conn().execute(
+            """
+            SELECT COUNT(*) AS count FROM bot_records
+            WHERE bot_id = ? AND collection = ? AND scope = ? AND owner_id = ?
+            """,
+            (bot_id, collection, scope, owner_id),
+        )
+        row = await cursor.fetchone()
+        return 0 if row is None else int(row["count"])
+
+    async def increment_record(
+        self,
+        bot_id: int,
+        collection: str,
+        key: str,
+        amount: int | float = 1,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> int | float:
+        current = await self.get_record(bot_id, collection, key, scope, user_id)
+        base = current if isinstance(current, (int, float)) and not isinstance(current, bool) else 0
+        numeric_amount = float(amount) if isinstance(amount, str) else amount
+        value = base + numeric_amount
+        await self.upsert_record(bot_id, collection, key, value, scope, user_id)
+        return value
+
+    async def append_record(
+        self,
+        bot_id: int,
+        collection: str,
+        key: str,
+        item: Any,
+        scope: str = "global",
+        user_id: int | None = None,
+    ) -> list[Any]:
+        current = await self.get_record(bot_id, collection, key, scope, user_id)
+        values = current if isinstance(current, list) else []
+        values.append(item)
+        await self.upsert_record(bot_id, collection, key, values, scope, user_id)
+        return values
+
     async def _fetchone(self, sql: str, params: Iterable[Any] = ()) -> aiosqlite.Row:
         cursor = await self._conn().execute(sql, tuple(params))
         row = await cursor.fetchone()
@@ -184,3 +380,33 @@ def _session(row: aiosqlite.Row) -> SessionRecord:
         current_step=int(row["current_step"]),
         session_data_json=str(row["session_data_json"]),
     )
+
+
+def _variable_key(bot_id: int, scope: str, name: str, user_id: int | None = None) -> str:
+    if scope == "global":
+        return f"bot:{bot_id}:global:{name}"
+    if scope == "user":
+        if user_id is None:
+            raise ValueError("user_id is required for user scoped variables")
+        return f"bot:{bot_id}:user:{user_id}:{name}"
+    raise ValueError(f"unsupported variable scope: {scope}")
+
+
+def _variable_key_prefix(bot_id: int, scope: str, user_id: int | None = None) -> str:
+    if scope == "global":
+        return f"bot:{bot_id}:global:"
+    if scope == "user":
+        if user_id is None:
+            raise ValueError("user_id is required for user scoped variables")
+        return f"bot:{bot_id}:user:{user_id}:"
+    raise ValueError(f"unsupported variable scope: {scope}")
+
+
+def _record_owner(scope: str, user_id: int | None = None) -> str:
+    if scope == "global":
+        return ""
+    if scope == "user":
+        if user_id is None:
+            raise ValueError("user_id is required for user scoped records")
+        return str(user_id)
+    raise ValueError(f"unsupported record scope: {scope}")
