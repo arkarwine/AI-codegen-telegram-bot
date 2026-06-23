@@ -6,6 +6,7 @@ dispatches steps whose ``type`` maps to an enabled, predefined plugin.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Final
 
 
@@ -48,7 +49,27 @@ BOT_SCHEMA_JSON_SCHEMA: Final[dict[str, Any]] = {
                 "properties": {
                     "id": {"type": "string"},
                     "trigger": {"type": "string"},
-                    "steps": {"type": "array", "items": {"type": "object"}},
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["type"],
+                            "properties": {
+                                "type": {"type": "string", "enum": sorted(BUILTIN_STEP_TYPES)},
+                                "text": {"type": "string"},
+                                "buttons": {"type": "array", "items": {"type": "string"}},
+                                "variable": {"type": "string"},
+                                "name": {"type": "string"},
+                                "value": {},
+                                "event_type": {"type": "string"},
+                                "trigger": {"type": "string"},
+                                "equals": {},
+                                "url": {"type": "string"},
+                                "prompt": {"type": "string"},
+                                "delay_seconds": {"type": "number"},
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -58,6 +79,37 @@ BOT_SCHEMA_JSON_SCHEMA: Final[dict[str, Any]] = {
 
 class SchemaValidationError(ValueError):
     """Raised when a bot schema is not deployable."""
+
+
+def normalize_bot_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a deployable schema with safe aliases and obvious step types filled in.
+
+    This is for AI/import ergonomics only. The runtime still executes only steps
+    that pass ``validate_bot_schema`` and resolve to registered plugin actions.
+    """
+
+    normalized = deepcopy(schema)
+    flows = normalized.get("flows")
+    if not isinstance(flows, list):
+        return normalized
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        steps = flow.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, dict) or step.get("type") is not None:
+                continue
+            if "buttons" in step:
+                step["type"] = "buttons"
+            elif "text" in step:
+                step["type"] = "message"
+            elif "variable" in step:
+                step["type"] = "wait_for_input"
+            elif "event_type" in step:
+                step["type"] = "analytics"
+    return normalized
 
 
 def validate_bot_schema(schema: dict[str, Any], allowed_step_types: set[str] | None = None) -> None:

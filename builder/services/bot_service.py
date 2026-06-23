@@ -7,7 +7,7 @@ from typing import Any
 
 from database.sqlite import Database
 from models.entities import BotRecord, User
-from schemas.bot_schema import validate_bot_schema
+from schemas.bot_schema import normalize_bot_schema, validate_bot_schema
 from services.ai import AiSchemaService
 
 
@@ -40,5 +40,6 @@ class BuilderService:
 
     async def import_schema(self, user: User, name: str, token: str, raw_json: str) -> BotRecord:
         schema: dict[str, Any] = json.loads(raw_json)
+        schema = normalize_bot_schema(schema)
         validate_bot_schema(schema)
         return await self.database.create_bot(user.id, name, None, token, schema, enabled=False)

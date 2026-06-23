@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any, Literal
 
-from schemas.bot_schema import BOT_SCHEMA_JSON_SCHEMA, validate_bot_schema
+from schemas.bot_schema import BOT_SCHEMA_JSON_SCHEMA, normalize_bot_schema, validate_bot_schema
 
 
 SCHEMA_SYSTEM_PROMPT = """
@@ -14,6 +14,8 @@ You generate Telegram bot definitions only as JSON.
 Return one JSON object matching the supplied response schema.
 Do not return prose, markdown, code, Python, or explanations.
 Use only supported step types and declarative fields.
+Every flow step must include a "type" field.
+Use "message" or "send_message" for text replies and "buttons" for button lists.
 Never include executable code, shell commands, eval strings, or Python snippets.
 """.strip()
 
@@ -65,6 +67,7 @@ class AiSchemaService:
         data = json.loads(response.text or "{}")
         if not isinstance(data, dict):
             raise ValueError("Gemini returned a non-object schema")
+        data = normalize_bot_schema(data)
         validate_bot_schema(data)
         return data
 
