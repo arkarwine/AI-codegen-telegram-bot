@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from database.sqlite import Database
 from models.entities import BotRecord
+from plugins.builtin import shutdown_scheduled_tasks
 from plugins.registry import PluginRegistry
 from runtime.dispatcher import WorkflowDispatcher
 from schemas.bot_schema import normalize_bot_schema, validate_bot_schema
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 class RunningBot:
     record: BotRecord
     client: Any
+    signature: str
 
 
 class RuntimeManager:
@@ -36,6 +40,7 @@ class RuntimeManager:
         self.dispatcher = WorkflowDispatcher(database, registry)
         self.running: dict[int, RunningBot] = {}
         self.failed_starts: dict[int, tuple[str, float]] = {}
+        self.started_at = time.time()
         self._stopping = asyncio.Event()
 
     async def run_forever(self) -> None:
@@ -46,6 +51,7 @@ class RuntimeManager:
 
     async def stop(self) -> None:
         self._stopping.set()
+        await shutdown_scheduled_tasks()
         for bot_id in list(self.running):
             await self.stop_bot(bot_id)
 
@@ -55,29 +61,33 @@ class RuntimeManager:
         logger.debug("reconcile: total=%s enabled=%s running=%s", len(records), enabled_count, len(self.running))
         for bot_id, running in list(self.running.items()):
             record = records.get(bot_id)
-            if record is None or not record.enabled or record.updated_at != running.record.updated_at:
+            modified = record is not None and _record_signature(record) != running.signature
+            if record is None or not record.enabled or modified:
                 reason = "deleted" if record is None else "disabled" if not record.enabled else "modified"
                 logger.info("stopping bot id=%s reason=%s", bot_id, reason)
                 await self.stop_bot(bot_id)
-                if record is None or record.updated_at != running.record.updated_at:
+                if record is None or modified:
                     self.failed_starts.pop(bot_id, None)
 
         now = asyncio.get_running_loop().time()
         for record in records.values():
             if record.enabled and record.id not in self.running:
+                signature = _record_signature(record)
                 failed = self.failed_starts.get(record.id)
-                if failed and failed[0] == record.updated_at and failed[1] > now:
+                if failed and failed[0] == signature and failed[1] > now:
                     continue
                 try:
                     await self.start_bot(record)
                     self.failed_starts.pop(record.id, None)
-                except Exception:
-                    self.failed_starts[record.id] = (record.updated_at, now + 60)
+                except Exception as exc:
+                    self.failed_starts[record.id] = (signature, now + 60)
+                    await self.database.mark_bot_failed(record.id, str(exc))
                     logger.exception(
                         "failed to start bot id=%s name=%s; will retry in about 60 seconds",
                         record.id,
                         record.name,
                     )
+        await self._write_snapshot(records)
 
     async def start_bot(self, record: BotRecord) -> None:
         from pyrogram import Client, filters
@@ -109,7 +119,12 @@ class RuntimeManager:
             await self.dispatcher.dispatch(record, app, callback_query)
 
         await client.start()
-        self.running[record.id] = RunningBot(record=record, client=client)
+        await self.database.mark_bot_started(record.id)
+        self.running[record.id] = RunningBot(
+            record=record,
+            client=client,
+            signature=_record_signature(record),
+        )
         logger.info("bot id=%s is running", record.id)
 
     async def stop_bot(self, bot_id: int) -> None:
@@ -117,3 +132,31 @@ class RuntimeManager:
         if running is not None:
             await running.client.stop()
             logger.info("bot id=%s stopped", bot_id)
+
+    async def _write_snapshot(self, records: dict[int, BotRecord]) -> None:
+        failed_bots = []
+        for bot_id, failed in self.failed_starts.items():
+            record = records.get(bot_id)
+            failed_bots.append(
+                {
+                    "id": bot_id,
+                    "name": record.name if record else "",
+                    "retry_after_monotonic": failed[1],
+                }
+            )
+        await self.database.set_setting(
+            "runtime:snapshot",
+            {
+                "heartbeat_at": datetime.now(UTC).isoformat(),
+                "database_path": str(self.settings.database_path),
+                "uptime_seconds": time.time() - self.started_at,
+                "plugin_count": len(self.registry.plugins),
+                "plugins": sorted(self.registry.plugins),
+                "running_bot_ids": sorted(self.running),
+                "failed_bots": failed_bots,
+            },
+        )
+
+
+def _record_signature(record: BotRecord) -> str:
+    return f"{record.token}\0{record.schema_json}"

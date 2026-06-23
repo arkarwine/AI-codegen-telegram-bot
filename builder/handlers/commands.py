@@ -11,24 +11,28 @@ from builder.services.bot_service import BuilderService
 
 HELP = """
 Commands
-/createbot name|token|prompt
-/editbot bot_id|instruction
+/createbot
+/editbot
 /deletebot bot_id
 /mybots
+/status bot_id
 /viewschema bot_id
 /enable bot_id
 /disable bot_id
 /analytics bot_id
 /exportschema bot_id
-/importschema name|token|json
-
-Example
-/createbot Support Bot|123456:ABC|Create a support bot with Support and Sales buttons
+/importschema
+/runtime
+/cancel
 """.strip()
 
 
 def register_handlers(app: Any, service: BuilderService) -> None:
     from pyrogram import filters
+
+    create_sessions: dict[int, dict[str, str]] = {}
+    edit_sessions: dict[int, dict[str, str]] = {}
+    import_sessions: dict[int, dict[str, str]] = {}
 
     @app.on_message(filters.command("start"))
     async def start(_: Any, message: Any) -> None:
@@ -37,23 +41,26 @@ def register_handlers(app: Any, service: BuilderService) -> None:
 
     @app.on_message(filters.command("createbot"))
     async def createbot(_: Any, message: Any) -> None:
-        user = await service.user(message.from_user.id, message.from_user.username)
-        try:
-            name, token, prompt = _payload(message).split("|", 2)
-            bot = await service.create_bot_from_prompt(user, name.strip(), None, token.strip(), prompt.strip())
-            await message.reply_text(f"Created bot #{bot.id}. Use /enable {bot.id} to deploy it.")
-        except Exception as exc:
-            await message.reply_text(f"Create failed: {exc}")
+        await service.user(message.from_user.id, message.from_user.username)
+        create_sessions[message.from_user.id] = {"step": "name"}
+        await message.reply_text("Bot name?")
+
+    @app.on_message(filters.command("cancel"))
+    async def cancel(_: Any, message: Any) -> None:
+        cancelled = any(
+            session.pop(message.from_user.id, None) is not None
+            for session in (create_sessions, edit_sessions, import_sessions)
+        )
+        if not cancelled:
+            await message.reply_text("Nothing to cancel.")
+        else:
+            await message.reply_text("Cancelled.")
 
     @app.on_message(filters.command("editbot"))
     async def editbot(_: Any, message: Any) -> None:
-        user = await service.user(message.from_user.id, message.from_user.username)
-        try:
-            bot_id, instruction = _payload(message).split("|", 1)
-            await service.edit_bot(user.id, int(bot_id), instruction.strip())
-            await message.reply_text("Schema updated and queued for hot reload.")
-        except Exception as exc:
-            await message.reply_text(f"Edit failed: {exc}")
+        await service.user(message.from_user.id, message.from_user.username)
+        edit_sessions[message.from_user.id] = {"step": "bot_id"}
+        await message.reply_text("Bot id to edit?")
 
     @app.on_message(filters.command("deletebot"))
     async def deletebot(_: Any, message: Any) -> None:
@@ -68,8 +75,34 @@ def register_handlers(app: Any, service: BuilderService) -> None:
     async def mybots(_: Any, message: Any) -> None:
         user = await service.user(message.from_user.id, message.from_user.username)
         bots = await service.database.list_user_bots(user.id)
-        lines = [f"#{bot.id} {bot.name} enabled={bot.enabled}" for bot in bots]
+        lines = [
+            f"#{bot.id} {bot.name} @{bot.username or '-'} enabled={bot.enabled}"
+            for bot in bots
+        ]
         await message.reply_text("\n".join(lines) or "No bots yet.")
+
+    @app.on_message(filters.command("status"))
+    async def status(_: Any, message: Any) -> None:
+        user = await service.user(message.from_user.id, message.from_user.username)
+        try:
+            bot = await service.get_user_bot(user.id, int(_payload(message)))
+            runtime = await service.runtime_snapshot()
+            running = bot.id in set(runtime.get("running_bot_ids", []))
+            failed = bot.id in {item.get("id") for item in runtime.get("failed_bots", [])}
+            lines = [
+                f"Bot #{bot.id}: {bot.name}",
+                f"Username: @{bot.username or '-'}",
+                f"Enabled: {bot.enabled}",
+                f"Running: {running}",
+                f"Failed: {failed}",
+                f"Updated: {bot.updated_at}",
+                f"Last started: {bot.last_started_at or '-'}",
+                f"Last failed: {bot.last_failed_at or '-'}",
+                f"Last error: {bot.last_error or '-'}",
+            ]
+            await message.reply_text("\n".join(lines))
+        except Exception as exc:
+            await message.reply_text(f"Status failed: {exc}")
 
     @app.on_message(filters.command("viewschema"))
     async def viewschema(_: Any, message: Any) -> None:
@@ -120,13 +153,80 @@ def register_handlers(app: Any, service: BuilderService) -> None:
 
     @app.on_message(filters.command("importschema"))
     async def importschema(_: Any, message: Any) -> None:
-        user = await service.user(message.from_user.id, message.from_user.username)
+        await service.user(message.from_user.id, message.from_user.username)
+        import_sessions[message.from_user.id] = {"step": "name"}
+        await message.reply_text("Imported bot name?")
+
+    @app.on_message(filters.command("runtime"))
+    async def runtime(_: Any, message: Any) -> None:
+        if not service.is_platform_admin(message.from_user.id):
+            await message.reply_text("This command is for the platform admin.")
+            return
         try:
-            name, token, raw_json = _payload(message).split("|", 2)
-            bot = await service.import_schema(user, name.strip(), token.strip(), raw_json)
-            await message.reply_text(f"Imported bot #{bot.id}.")
+            snapshot = await service.runtime_snapshot()
+            running = snapshot.get("running_bot_ids", [])
+            failed = snapshot.get("failed_bots", [])
+            lines = [
+                "Runtime Engine",
+                f"Database: {snapshot.get('database_path', '-')}",
+                f"Uptime: {int(float(snapshot.get('uptime_seconds', 0)))}s",
+                f"Plugins: {snapshot.get('plugin_count', 0)}",
+                f"Running bots: {len(running)} {running}",
+                f"Failed bots: {len(failed)}",
+                f"Heartbeat: {snapshot.get('heartbeat_at', '-')}",
+            ]
+            await message.reply_text("\n".join(lines))
         except Exception as exc:
-            await message.reply_text(f"Import failed: {exc}")
+            await message.reply_text(f"Runtime status failed: {exc}")
+
+    @app.on_message(filters.text)
+    async def continue_createbot(_: Any, message: Any) -> None:
+        if message.text and message.text.startswith("/"):
+            return
+        user_id = message.from_user.id
+        if user_id in edit_sessions:
+            await _continue_editbot(message, service, edit_sessions)
+            return
+        if user_id in import_sessions:
+            await _continue_importschema(message, service, import_sessions)
+            return
+
+        state = create_sessions.get(user_id)
+        if state is None:
+            return
+
+        text = str(message.text or "").strip()
+        if not text:
+            await message.reply_text("Please send a non-empty value, or /cancel.")
+            return
+
+        step = state["step"]
+        if step == "name":
+            state["name"] = text
+            state["step"] = "token"
+            await message.reply_text("Bot token from BotFather?")
+            return
+        if step == "token":
+            state["token"] = text
+            state["step"] = "prompt"
+            await message.reply_text("Describe what this bot should do.")
+            return
+
+        user = await service.user(message.from_user.id, message.from_user.username)
+        create_sessions.pop(user_id, None)
+        await message.reply_text("Creating schema and validating the bot token...")
+        try:
+            bot = await service.create_bot_from_prompt(
+                user,
+                state["name"],
+                state["token"],
+                text,
+            )
+            await message.reply_text(
+                f"Created bot #{bot.id} @{bot.username or '-'}.\nUse /enable {bot.id} to deploy it."
+            )
+        except Exception as exc:
+            await message.reply_text(f"Create failed: {exc}")
 
 
 def _payload(message: Any) -> str:
@@ -138,3 +238,65 @@ def _payload(message: Any) -> str:
 
 def _chunk(text: str, limit: int = 3900) -> str:
     return text if len(text) <= limit else text[:limit] + "\n..."
+
+
+async def _continue_editbot(
+    message: Any,
+    service: BuilderService,
+    sessions: dict[int, dict[str, str]],
+) -> None:
+    state = sessions[message.from_user.id]
+    text = str(message.text or "").strip()
+    if not text:
+        await message.reply_text("Please send a value, or /cancel.")
+        return
+    if state["step"] == "bot_id":
+        try:
+            int(text)
+        except ValueError:
+            await message.reply_text("Bot id must be a number.")
+            return
+        state["bot_id"] = text
+        state["step"] = "instruction"
+        await message.reply_text("What should change?")
+        return
+
+    user = await service.user(message.from_user.id, message.from_user.username)
+    sessions.pop(message.from_user.id, None)
+    await message.reply_text("Updating schema...")
+    try:
+        await service.edit_bot(user.id, int(state["bot_id"]), text)
+        await message.reply_text("Schema updated and queued for hot reload.")
+    except Exception as exc:
+        await message.reply_text(f"Edit failed: {exc}")
+
+
+async def _continue_importschema(
+    message: Any,
+    service: BuilderService,
+    sessions: dict[int, dict[str, str]],
+) -> None:
+    state = sessions[message.from_user.id]
+    text = str(message.text or "").strip()
+    if not text:
+        await message.reply_text("Please send a value, or /cancel.")
+        return
+    if state["step"] == "name":
+        state["name"] = text
+        state["step"] = "token"
+        await message.reply_text("Bot token from BotFather?")
+        return
+    if state["step"] == "token":
+        state["token"] = text
+        state["step"] = "schema"
+        await message.reply_text("Paste the JSON schema.")
+        return
+
+    user = await service.user(message.from_user.id, message.from_user.username)
+    sessions.pop(message.from_user.id, None)
+    await message.reply_text("Validating token and importing schema...")
+    try:
+        bot = await service.import_schema(user, state["name"], state["token"], text)
+        await message.reply_text(f"Imported bot #{bot.id} @{bot.username or '-'}.")
+    except Exception as exc:
+        await message.reply_text(f"Import failed: {exc}")

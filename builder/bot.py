@@ -21,6 +21,7 @@ async def run_builder_bot() -> None:
 
     configure_logging("builder-bot")
     settings = Settings.from_env()
+    settings.validate_for_builder()
     token = require(settings.builder_bot_token, "BUILDER_BOT_TOKEN")
     session_dir = Path("sessions")
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -34,7 +35,16 @@ async def run_builder_bot() -> None:
         bot_token=token,
         workdir=str(session_dir),
     )
-    register_handlers(app, BuilderService(database, AiSchemaService()))
+    register_handlers(
+        app,
+        BuilderService(
+            database,
+            AiSchemaService(),
+            settings.telegram_api_id,
+            settings.telegram_api_hash,
+            settings.owner_telegram_id,
+        ),
+    )
     started = False
     try:
         await app.start()

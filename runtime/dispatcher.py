@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,9 @@ from plugins.base import PluginContext
 from plugins.registry import PluginRegistry
 from runtime.sessions import SessionStore
 from schemas.bot_schema import normalize_bot_schema, validate_bot_schema
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +58,25 @@ class WorkflowDispatcher:
             prefer_current=bool(waiting_variable and event.command is None),
         )
         if flow is None:
+            logger.debug(
+                "workflow_no_match %s",
+                _log_json({"bot_id": bot.id, "user_id": user_id, "event_type": event.type}),
+            )
             return
 
         start_index = current_step if current_flow == flow["id"] else 0
+        logger.info(
+            "workflow_flow %s",
+            _log_json(
+                {
+                    "bot_id": bot.id,
+                    "flow_id": flow["id"],
+                    "user_id": user_id,
+                    "event_type": event.type,
+                    "start_index": start_index,
+                }
+            ),
+        )
         await self.database.record_event(bot.id, "message")
         runtime_data = await self._runtime_data(bot.id, user_id, data, event)
         next_state = await self._run_steps(
@@ -127,11 +147,21 @@ class WorkflowDispatcher:
                 services={"database": self.database},
             )
             plugin = self.registry.get(str(step["type"]))
+            step_log = {
+                "bot_id": bot.id,
+                "flow_id": active_flow["id"],
+                "user_id": user_id,
+                "step_index": index,
+                "step_id": step.get("id", ""),
+                "plugin": plugin.name,
+            }
+            logger.info("workflow_step_start %s", _log_json(step_log))
             try:
-                result = await plugin.execute(step, context)
+                result = await plugin.execute(step, context) or {}
                 success = True
             except Exception:
                 success = False
+                logger.exception("workflow_step_error %s", _log_json(step_log))
                 if target := step.get("on_failure"):
                     jump = _resolve_jump(schema, active_flow, str(target))
                     if jump is None:
@@ -139,6 +169,10 @@ class WorkflowDispatcher:
                     active_flow, steps, index = jump
                     continue
                 raise
+            logger.info(
+                "workflow_step_done %s",
+                _log_json({**step_log, "result_keys": sorted(result)}),
+            )
 
             updates = result.get("data", {})
             if isinstance(updates, dict):
@@ -362,3 +396,7 @@ def _resolve_jump(
         if step.get("id") == target:
             return current_flow, current_flow["steps"], index
     return None
+
+
+def _log_json(data: dict[str, Any]) -> str:
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))

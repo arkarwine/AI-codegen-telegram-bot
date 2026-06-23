@@ -76,8 +76,34 @@ class Database:
         )
         await self._conn().commit()
 
+    async def update_bot_identity(self, bot_id: int, username: str | None) -> None:
+        await self._conn().execute("UPDATE bots SET username = ? WHERE id = ?", (username, bot_id))
+        await self._conn().commit()
+
     async def set_bot_enabled(self, bot_id: int, enabled: bool) -> None:
         await self._conn().execute("UPDATE bots SET enabled = ? WHERE id = ?", (int(enabled), bot_id))
+        await self._conn().commit()
+
+    async def mark_bot_started(self, bot_id: int) -> None:
+        await self._conn().execute(
+            """
+            UPDATE bots
+            SET last_started_at = CURRENT_TIMESTAMP, last_error = NULL
+            WHERE id = ?
+            """,
+            (bot_id,),
+        )
+        await self._conn().commit()
+
+    async def mark_bot_failed(self, bot_id: int, error: str) -> None:
+        await self._conn().execute(
+            """
+            UPDATE bots
+            SET last_failed_at = CURRENT_TIMESTAMP, last_error = ?
+            WHERE id = ?
+            """,
+            (error[:1000], bot_id),
+        )
         await self._conn().commit()
 
     async def delete_bot(self, bot_id: int, owner_id: int) -> bool:
@@ -368,6 +394,9 @@ def _bot(row: aiosqlite.Row) -> BotRecord:
         schema_json=str(row["schema_json"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        last_error=row["last_error"],
+        last_started_at=row["last_started_at"],
+        last_failed_at=row["last_failed_at"],
     )
 
 

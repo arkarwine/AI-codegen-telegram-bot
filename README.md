@@ -34,27 +34,38 @@ Required environment variables:
 - `DATABASE_PATH`
 - `GEMINI_API_KEY`
 
+Optional:
+
+- `OWNER_TELEGRAM_ID`: if set, only this Telegram user can call `/runtime`.
+
 ## Builder Commands
 
 ```text
 /start
-/createbot <name>|<token>|<prompt>
-/editbot <bot_id>|<instruction>
-/deletebot <bot_id>
+/createbot
+/editbot
+/deletebot bot_id
 /mybots
-/viewschema <bot_id>
-/enable <bot_id>
-/disable <bot_id>
-/analytics <bot_id>
-/exportschema <bot_id>
-/importschema <name>|<token>|<json>
+/status bot_id
+/viewschema bot_id
+/enable bot_id
+/disable bot_id
+/analytics bot_id
+/exportschema bot_id
+/importschema
+/runtime
+/cancel
 ```
+
+`/createbot`, `/editbot`, and `/importschema` are step-by-step Telegram conversations. Bot tokens are validated with Telegram before a bot is stored or enabled.
 
 ## Runtime Model
 
 `runtime_engine.py` polls SQLite, starts newly enabled bots, stops disabled bots, and restarts modified bots. Every bot receives a persistent Kurigram session under `sessions/`.
 
 Schemas are validated before storage and again before runtime execution. Step execution is restricted to the plugin registry.
+
+The runtime writes a heartbeat snapshot to SQLite for `/runtime` and records per-bot `last_started_at`, `last_failed_at`, and `last_error` for `/status`.
 
 ## Flow Features
 

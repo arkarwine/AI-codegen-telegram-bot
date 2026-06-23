@@ -7,10 +7,15 @@ bounded Python implementation owned by the platform.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
 from plugins.base import PluginContext
+
+
+logger = logging.getLogger(__name__)
+SCHEDULED_TASKS: set[asyncio.Task[None]] = set()
 
 
 class SendMessagePlugin:
@@ -222,7 +227,7 @@ class AiChatPlugin:
 
         client = genai.Client()
         response = client.models.generate_content(
-            model=str(config.get("model", "gemini-3.1-flash-lite")),
+            model=str(config.get("model", "gemini-2.5-flash")),
             contents=_render(str(config["prompt"]), context.session_data),
         )
         await context.message.reply_text(response.text or "")
@@ -236,12 +241,15 @@ class SchedulerPlugin:
 
     async def execute(self, config: dict[str, Any], context: PluginContext) -> dict[str, Any]:
         text = _render(str(config["text"]), context.session_data)
+        delay_seconds = float(config["delay_seconds"])
 
         async def later() -> None:
-            await asyncio.sleep(float(config["delay_seconds"]))
+            await asyncio.sleep(delay_seconds)
             await context.message.reply_text(text)
 
-        asyncio.create_task(later())
+        task = asyncio.create_task(later())
+        SCHEDULED_TASKS.add(task)
+        task.add_done_callback(_discard_scheduled_task)
         return {}
 
 
@@ -391,3 +399,23 @@ def _matches(value: Any, config: dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return False
+
+
+def _discard_scheduled_task(task: asyncio.Task[None]) -> None:
+    SCHEDULED_TASKS.discard(task)
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("scheduled task failed")
+
+
+async def shutdown_scheduled_tasks() -> None:
+    if not SCHEDULED_TASKS:
+        return
+    tasks = list(SCHEDULED_TASKS)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    SCHEDULED_TASKS.clear()

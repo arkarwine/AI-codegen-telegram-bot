@@ -24,6 +24,9 @@ class BotRecord:
     schema_json: str
     created_at: str
     updated_at: str
+    last_error: str | None
+    last_started_at: str | None
+    last_failed_at: str | None
 
 
 @dataclass(frozen=True, slots=True)

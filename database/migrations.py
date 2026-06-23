@@ -29,7 +29,10 @@ CREATE TABLE IF NOT EXISTS bots (
     enabled INTEGER NOT NULL DEFAULT 0,
     schema_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error TEXT,
+    last_started_at TEXT,
+    last_failed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -76,8 +79,10 @@ CREATE TABLE IF NOT EXISTS bot_records (
 CREATE INDEX IF NOT EXISTS idx_bot_records_lookup
 ON bot_records(bot_id, collection, scope, owner_id);
 
-CREATE TRIGGER IF NOT EXISTS bots_touch_updated_at
-AFTER UPDATE ON bots
+DROP TRIGGER IF EXISTS bots_touch_updated_at;
+
+CREATE TRIGGER bots_touch_updated_at
+AFTER UPDATE OF owner_id, name, username, token, enabled, schema_json ON bots
 BEGIN
     UPDATE bots SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
@@ -94,4 +99,19 @@ async def migrate(db: aiosqlite.Connection) -> None:
     """Apply all SQLite migrations."""
 
     await db.executescript(SCHEMA_SQL)
+    await _add_column_if_missing(db, "bots", "last_error", "TEXT")
+    await _add_column_if_missing(db, "bots", "last_started_at", "TEXT")
+    await _add_column_if_missing(db, "bots", "last_failed_at", "TEXT")
     await db.commit()
+
+
+async def _add_column_if_missing(
+    db: aiosqlite.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    columns = {str(row[1]) for row in await cursor.fetchall()}
+    if column not in columns:
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
