@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from json import JSONDecodeError
 from typing import Any, Literal
 
@@ -17,6 +16,7 @@ from schemas.bot_schema import (
 
 
 SCHEMA_REFINEMENT_PASSES = 3
+SCHEMA_GENERATION_RESTARTS = 2
 
 
 PROMPT_PREPARATION_JSON_SCHEMA: dict[str, Any] = {
@@ -225,11 +225,11 @@ class AiSchemaService:
     model = "gemini-3.1-flash-lite"
 
     async def create_schema(self, user_prompt: str) -> dict[str, Any]:
-        return await self._generate(user_prompt, allow_fallback=True, refine=True)
+        return await self._generate(user_prompt, refine=True)
 
     async def modify_schema(self, schema: dict[str, Any], user_prompt: str) -> dict[str, Any]:
         payload = json.dumps({"existing_schema": schema, "request": user_prompt})
-        return await self._generate(payload, allow_fallback=False, refine=True)
+        return await self._generate(payload, refine=True)
 
     def explain_schema(self, schema: dict[str, Any]) -> str:
         validate_bot_schema(schema)
@@ -248,34 +248,33 @@ class AiSchemaService:
             suggestions.append("Add analytics steps for important conversions.")
         return suggestions or ["Schema is already concise and deployable."]
 
-    async def _generate(self, contents: str, allow_fallback: bool, refine: bool) -> dict[str, Any]:
+    async def _generate(self, contents: str, refine: bool) -> dict[str, Any]:
         os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY", "")
         from google import genai
         from google.genai import types
 
         client = genai.Client()
-        prepared_contents = contents
-        try:
-            prepared_contents = await self._prepare_generation_prompt(client, types, contents)
-            data = await self._generate_valid_schema(
-                client=client,
-                types=types,
-                contents=prepared_contents,
-                system_instruction=SCHEMA_SYSTEM_PROMPT,
-                repair_original=prepared_contents,
-            )
-            if refine:
-                data = await self._refine_schema(client, types, prepared_contents, data)
-            data = await self._ai_fix_schema(client, types, prepared_contents, data)
-            return data
-        except (JSONDecodeError, SchemaValidationError, ValueError) as exc:
-            validation_error: Exception = exc
+        validation_error: Exception | None = None
+        current_contents = contents
+        for attempt in range(_generation_attempt_count()):
+            try:
+                prepared_contents = await self._prepare_generation_prompt(client, types, current_contents)
+                data = await self._generate_valid_schema(
+                    client=client,
+                    types=types,
+                    contents=prepared_contents,
+                    system_instruction=SCHEMA_SYSTEM_PROMPT,
+                    repair_original=prepared_contents,
+                )
+                if refine:
+                    data = await self._refine_schema(client, types, prepared_contents, data)
+                data = await self._ai_fix_schema(client, types, prepared_contents, data)
+                return data
+            except (JSONDecodeError, SchemaValidationError, ValueError) as exc:
+                validation_error = exc
+                current_contents = _restart_generation_prompt(contents, attempt + 1, exc)
 
-        if allow_fallback:
-            fallback = _fallback_schema(prepared_contents)
-            validate_bot_schema(fallback)
-            return fallback
-        raise ValueError(f"Gemini returned an invalid bot schema: {validation_error}") from validation_error
+        raise ValueError(f"Gemini could not produce a valid bot schema after restarts: {validation_error}") from validation_error
 
     async def _prepare_generation_prompt(self, client: Any, types: Any, contents: str) -> str:
         response = client.models.generate_content(
@@ -463,6 +462,37 @@ def _refinement_pass_count() -> int:
     return max(0, min(value, 5))
 
 
+def _generation_attempt_count() -> int:
+    raw_value = os.getenv("SCHEMA_GENERATION_RESTARTS", str(SCHEMA_GENERATION_RESTARTS))
+    try:
+        restarts = int(raw_value)
+    except ValueError:
+        restarts = SCHEMA_GENERATION_RESTARTS
+    return 1 + max(0, min(restarts, 5))
+
+
+def _restart_generation_prompt(original_contents: str, attempt: int, error: Exception) -> str:
+    return json.dumps(
+        {
+            "task": "Restart the Telegram bot schema generation process from scratch.",
+            "restart_attempt": attempt,
+            "original_user_prompt_or_request": original_contents,
+            "previous_failure": str(error),
+            "restart_rules": [
+                "Do not return a fallback, apology, placeholder, or minimal safe bot.",
+                "Fix the root cause that made the previous schema invalid.",
+                "Regenerate the production brief from the original request.",
+                "Then generate a complete production-grade Telegram bot schema.",
+                "Use only supported declarative schema actions.",
+                "Use callback buttons with matching callback/button triggers.",
+                "Use data_transform, condition, variables, and database_query for deterministic behavior.",
+                "Return only data that the next prompt-preparation layer can turn into a complete brief.",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
 def _refinement_prompt(original_contents: str, schema: dict[str, Any], pass_number: int) -> str:
     focus = _refinement_focus(pass_number)
     return json.dumps(
@@ -504,63 +534,6 @@ def _refinement_focus(pass_number: int) -> list[str]:
         ],
     ]
     return focuses[(pass_number - 1) % len(focuses)]
-
-
-def _fallback_schema(user_prompt: str) -> dict[str, Any]:
-    name = _fallback_name(user_prompt)
-    return {
-        "metadata": {
-            "name": name,
-            "description": "Safe fallback schema generated after AI validation failed.",
-        },
-        "permissions": {},
-        "database": {},
-        "variables": {},
-        "flows": [
-            {
-                "id": "start",
-                "triggers": [
-                    {"type": "command", "value": "/start"},
-                    {"type": "callback", "value": "restart"},
-                ],
-                "steps": [
-                    {
-                        "type": "message",
-                        "text": f"{name} is ready. I created a safe Telegram fallback bot because the requested advanced schema could not be validated. Use Help for the next step.",
-                    },
-                    {
-                        "type": "buttons",
-                        "text": "Choose what you would like to do next:",
-                        "buttons": [
-                            {"text": "Help", "value": "help", "color": "primary"},
-                            {"text": "Restart", "value": "restart", "color": "neutral"},
-                        ],
-                    },
-                ],
-            },
-            {
-                "id": "help",
-                "trigger": {"type": "callback", "value": "help"},
-                "steps": [
-                    {
-                        "type": "message",
-                        "text": "Edit this bot with /editbot and describe the behavior you want in smaller pieces.",
-                    }
-                ],
-            },
-        ],
-    }
-
-
-def _fallback_name(user_prompt: str) -> str:
-    words = re.findall(r"[A-Za-z0-9]+", user_prompt)
-    if not words:
-        return "Generated Bot"
-    ignored = {"create", "a", "an", "the", "bot", "telegram", "for", "with"}
-    title_words = [word for word in words[:8] if word.lower() not in ignored]
-    if not title_words:
-        title_words = words[:3]
-    return " ".join(title_words[:4]).title()[:60]
 
 
 AiAction = Literal["create", "modify", "explain", "validate", "suggest"]
