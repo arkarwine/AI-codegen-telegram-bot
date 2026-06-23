@@ -189,6 +189,9 @@ def _looks_like_prefix_trigger(value: str) -> bool:
 
 def _normalize_step_fields(step: dict[str, Any]) -> None:
     step_type = step.get("type")
+    if step_type in {"message", "send_message"} and isinstance(step.get("buttons"), list):
+        step["type"] = "buttons"
+        step_type = "buttons"
     if step_type == "set_variable":
         if not isinstance(step.get("name"), str) and isinstance(step.get("save_as"), str):
             step["name"] = step.pop("save_as")

@@ -68,8 +68,8 @@ Transitions:
 Templates and data:
 - Use {{name}} or {{session.name}} for session data, {{user.name}} for user
   variables, {{global.name}} for bot variables, and {{event.text}},
-  {{event.command}}, {{event.type}}, {{telegram_user.id}},
-  {{telegram_user.username}} for runtime data.
+  {{event.value}}, {{event.callback_data}}, {{event.command}}, {{event.type}},
+  {{telegram_user.id}}, {{telegram_user.username}} for runtime data.
 - Persist real business data with database_query. Do not fake persistence with
   only messages or session variables.
 
@@ -86,6 +86,8 @@ Step contracts:
   blue, green, red, yellow, orange, purple, neutral, dark. Telegram has no true
   per-button background colors, so the runtime renders color intent with
   colored emoji markers. Use colors/styles on important callback buttons.
+  Never put buttons on message/send_message; use type buttons for any Telegram
+  message that includes an inline keyboard.
 - wait_for_input: use prompt and variable for each free-text answer.
 - set_variable: requires name and value; scope is session, user, or global.
   Never use save_as on set_variable.
@@ -116,7 +118,9 @@ Production patterns:
 - Support: category buttons, collect issue, save ticket with status open,
   urgent condition branch, confirmation.
 - Quiz/game: button-based choices or board positions, state variables, result
-  branches, replay button. Never say the logic is "basic" or external.
+  branches, replay button. Never say the logic is "basic" or external. Do not
+  promise professional game logic unless the schema actually tracks state,
+  validates moves, updates results, and handles replay.
 - Admin broadcast: /admin or /broadcast, admin_only, broadcast, analytics.
 """.strip()
 
@@ -265,6 +269,7 @@ def _repair_prompt(
                 "If the user prompt is short, expand it into a complete Telegram bot with useful flows.",
                 "Use informative Telegram message text and tasteful emojis.",
                 "Use buttons/callbacks for finite choices instead of plain-text menus.",
+                "Use type buttons for messages with inline keyboards; do not attach buttons to send_message.",
                 "Use button color/style fields for important callback buttons.",
                 "Every step must have a valid type.",
                 "set_variable requires name and value; do not use save_as on set_variable.",

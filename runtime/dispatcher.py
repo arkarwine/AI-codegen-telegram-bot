@@ -107,6 +107,8 @@ class WorkflowDispatcher:
         runtime_data["event"] = {
             "type": event.type,
             "text": event.text,
+            "value": event.text,
+            "callback_data": event.text if event.type == "callback" else "",
             "command": event.command or "",
         }
         runtime_data["telegram_user"] = {
