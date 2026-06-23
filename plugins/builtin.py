@@ -16,6 +16,26 @@ from plugins.base import PluginContext
 
 logger = logging.getLogger(__name__)
 SCHEDULED_TASKS: set[asyncio.Task[None]] = set()
+BUTTON_COLOR_MARKERS = {
+    "blue": "\U0001F535",
+    "primary": "\U0001F535",
+    "info": "\U0001F535",
+    "green": "\U0001F7E2",
+    "success": "\U0001F7E2",
+    "confirm": "\U0001F7E2",
+    "red": "\U0001F534",
+    "danger": "\U0001F534",
+    "delete": "\U0001F534",
+    "cancel": "\U0001F534",
+    "yellow": "\U0001F7E1",
+    "warning": "\U0001F7E1",
+    "orange": "\U0001F7E0",
+    "purple": "\U0001F7E3",
+    "neutral": "\u26aa",
+    "gray": "\u26aa",
+    "grey": "\u26aa",
+    "dark": "\u26ab",
+}
 
 
 class SendMessagePlugin:
@@ -230,7 +250,13 @@ class AiChatPlugin:
             model=str(config.get("model", "gemini-3.1-flash-lite")),
             contents=_render(str(config["prompt"]), context.session_data),
         )
-        await context.message.reply_text(response.text or "")
+        text = response.text or ""
+        save_as = config.get("save_as")
+        if save_as:
+            if config.get("reply"):
+                await context.message.reply_text(text)
+            return {"data": {str(save_as): text}}
+        await context.message.reply_text(text)
         return {}
 
 
@@ -323,8 +349,12 @@ def _button_rows(raw_buttons: Any, data: dict[str, Any]) -> list[list[Any]]:
             source_row = [source_row]
         for item in source_row:
             if isinstance(item, dict):
-                label = _render(str(item.get("text", item.get("label", ""))), data)
-                value = _render(str(item.get("value", item.get("callback_data", label))), data)
+                raw_label = _render(str(item.get("text", item.get("label", ""))), data)
+                label = raw_label
+                marker = _button_color_marker(item)
+                if marker and not label.startswith(marker):
+                    label = f"{marker} {label}"
+                value = _render(str(item.get("value", item.get("callback_data", raw_label))), data)
             else:
                 label = _render(str(item), data)
                 value = label
@@ -333,6 +363,13 @@ def _button_rows(raw_buttons: Any, data: dict[str, Any]) -> list[list[Any]]:
         if row:
             rows.append(row)
     return rows
+
+
+def _button_color_marker(item: dict[str, Any]) -> str:
+    raw_color = item.get("color", item.get("colour", item.get("style", "")))
+    if not isinstance(raw_color, str):
+        return ""
+    return BUTTON_COLOR_MARKERS.get(raw_color.strip().lower(), "")
 
 
 def _require_key(action: str, key: str) -> None:

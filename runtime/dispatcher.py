@@ -103,6 +103,7 @@ class WorkflowDispatcher:
         event: RuntimeEvent,
     ) -> dict[str, Any]:
         runtime_data = dict(session_data)
+        runtime_data["session"] = session_data
         runtime_data["event"] = {
             "type": event.type,
             "text": event.text,
@@ -178,6 +179,7 @@ class WorkflowDispatcher:
             if isinstance(updates, dict):
                 data.update(updates)
                 runtime_data.update(updates)
+                runtime_data["session"] = data
             _merge_scoped_runtime_data(runtime_data, result.get("scoped_data"))
 
             if result.get("stop"):

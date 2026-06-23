@@ -37,6 +37,7 @@ Required environment variables:
 Optional:
 
 - `OWNER_TELEGRAM_ID`: if set, only this Telegram user can call `/runtime`.
+- `SCHEMA_REFINEMENT_PASSES`: number of Gemini schema-improvement passes after initial generation. Defaults to `3`, capped at `5`.
 
 ## Builder Commands
 
@@ -74,6 +75,8 @@ The Runtime Engine supports command, text, button, callback, regex, and catch-al
 Steps can use `when` conditions, pause with `wait_for_input`, store session/user/global variables with `set_variable`, render values with `{{name}}`, `{{user.name}}`, `{{global.name}}`, and use event helpers such as `{{event.text}}` and `{{telegram_user.id}}`.
 
 Supported action plugins include messages, buttons, edit/delete message, wait, conditions, scoped variables, safe key/value storage, HTTP GET, Gemini chat, scheduler, broadcast, admin-only guards, and analytics.
+
+Inline button objects may include `color`, `colour`, or `style` metadata such as `primary`, `success`, `danger`, or `warning`. Telegram does not support true per-button background colors, so the runtime renders the color intent as a colored emoji marker in the button label.
 
 ## Database Interactions
 

@@ -128,6 +128,7 @@ def normalize_bot_schema(schema: dict[str, Any]) -> dict[str, Any]:
     for flow in flows:
         if not isinstance(flow, dict):
             continue
+        _normalize_flow_triggers(flow)
         if "trigger" not in flow and "triggers" not in flow and flow.get("id") == "start":
             flow["trigger"] = "/start"
         steps = flow.get("steps")
@@ -155,6 +156,35 @@ def normalize_bot_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 step["type"] = "analytics"
             _normalize_transition_targets(step, flow_ids, step_ids)
     return normalized
+
+
+def _normalize_flow_triggers(flow: dict[str, Any]) -> None:
+    trigger = flow.get("trigger")
+    if isinstance(trigger, dict):
+        _normalize_trigger(trigger)
+
+    triggers = flow.get("triggers")
+    if not isinstance(triggers, list):
+        return
+    for item in triggers:
+        if isinstance(item, dict):
+            _normalize_trigger(item)
+
+
+def _normalize_trigger(trigger: dict[str, Any]) -> None:
+    trigger_type = str(trigger.get("type", "text"))
+    value = trigger.get("value")
+    if (
+        trigger_type in {"button", "callback"}
+        and "match" not in trigger
+        and isinstance(value, str)
+        and _looks_like_prefix_trigger(value)
+    ):
+        trigger["match"] = "prefix"
+
+
+def _looks_like_prefix_trigger(value: str) -> bool:
+    return value.endswith(("_", ":", ".", "/", "-"))
 
 
 def _normalize_step_fields(step: dict[str, Any]) -> None:
