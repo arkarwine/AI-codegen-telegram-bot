@@ -6,6 +6,7 @@ dispatches steps whose ``type`` maps to an enabled, predefined plugin.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any, Final
 
@@ -76,9 +77,11 @@ BOT_SCHEMA_JSON_SCHEMA: Final[dict[str, Any]] = {
                                 "reply": {"type": "boolean"},
                                 "source_variable": {"type": "string"},
                                 "index_variable": {"type": "string"},
+                                "index": {},
                                 "source": {},
                                 "pattern": {"type": "string"},
                                 "group": {},
+                                "needle": {},
                                 "default": {},
                                 "template": {"type": "string"},
                                 "choices": {"type": "array", "items": {}},
@@ -91,9 +94,13 @@ BOT_SCHEMA_JSON_SCHEMA: Final[dict[str, Any]] = {
                                 "then": {"type": "string"},
                                 "else": {"type": "string"},
                                 "url": {"type": "string"},
+                                "timeout": {"type": "number"},
                                 "prompt": {"type": "string"},
                                 "delay_seconds": {"type": "number"},
                                 "scope": {"type": "string"},
+                                "color": {"type": "string"},
+                                "colour": {"type": "string"},
+                                "style": {"type": "string"},
                                 "telegram_ids": {"type": "array", "items": {"type": "number"}},
                                 "denied_text": {"type": "string"},
                                 "include_self": {"type": "boolean"},
@@ -217,6 +224,16 @@ def _normalize_step_fields(step: dict[str, Any]) -> None:
                 step["key"] = step["name"]
             elif isinstance(step.get("variable"), str):
                 step["key"] = step["variable"]
+    if step_type == "data_transform":
+        action = str(step.get("action", "")).lower()
+        if (
+            action == "replace_at"
+            and "source_variable" in step
+            and "source" in step
+            and "value" not in step
+            and "item" not in step
+        ):
+            step["value"] = step.pop("source")
 
 
 def validate_bot_schema(schema: dict[str, Any], allowed_step_types: set[str] | None = None) -> None:
@@ -276,6 +293,7 @@ def validate_bot_schema(schema: dict[str, Any], allowed_step_types: set[str] | N
                 raise SchemaValidationError(
                     f"{flow['id']}[{index}] references unknown next_step: {next_step}"
                 )
+    _validate_button_routes(flows)
 
 
 def _validate_trigger(flow_id: str, trigger: Any) -> None:
@@ -290,6 +308,11 @@ def _validate_trigger(flow_id: str, trigger: Any) -> None:
         raise SchemaValidationError(f"flow {flow_id} has unsupported trigger type: {trigger_type}")
     if trigger_type != "any" and not isinstance(trigger.get("value"), str):
         raise SchemaValidationError(f"flow {flow_id} trigger.value is required")
+    match_type = str(trigger.get("match", "exact"))
+    if match_type not in {"exact", "case_insensitive", "contains", "prefix", "regex"}:
+        raise SchemaValidationError(f"flow {flow_id} trigger.match is unsupported: {match_type}")
+    if trigger_type == "regex" or match_type == "regex":
+        _validate_regex(flow_id, "trigger.value", trigger.get("value", ""))
 
 
 def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[str]) -> None:
@@ -302,10 +325,11 @@ def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[
         raise SchemaValidationError(f"{flow_id}[{index}] has unsupported step type: {step_type}")
     if step_type in {"send_message", "message"} and not isinstance(step.get("text"), str):
         raise SchemaValidationError(f"{flow_id}[{index}] message text is required")
+    _validate_templates(flow_id, index, step)
     if "when" in step:
         _validate_condition_object(flow_id, index, step["when"], "when")
-    if step_type == "buttons" and not isinstance(step.get("buttons"), list):
-        raise SchemaValidationError(f"{flow_id}[{index}] buttons array is required")
+    if step_type == "buttons":
+        _validate_buttons(flow_id, index, step.get("buttons"))
     if step_type == "wait_for_input" and "variable" in step and not isinstance(step["variable"], str):
         raise SchemaValidationError(f"{flow_id}[{index}] wait_for_input variable must be a string")
     if step_type == "condition" and not isinstance(step.get("variable", step.get("name")), str):
@@ -331,8 +355,8 @@ def _validate_step(flow_id: str, index: int, step: Any, allowed_step_types: set[
             )
     if step_type == "http_request" and not isinstance(step.get("url"), str):
         raise SchemaValidationError(f"{flow_id}[{index}] http_request requires url")
-    if step_type == "ai_chat" and not isinstance(step.get("prompt"), str):
-        raise SchemaValidationError(f"{flow_id}[{index}] ai_chat requires prompt")
+    if step_type == "ai_chat":
+        _validate_ai_chat_step(flow_id, index, step)
     if step_type == "broadcast" and not isinstance(step.get("text"), str):
         raise SchemaValidationError(f"{flow_id}[{index}] broadcast requires text")
     if step_type == "edit_message" and not isinstance(step.get("text"), str):
@@ -380,6 +404,8 @@ def _validate_condition_object(flow_id: str, index: int, condition: Any, label: 
         raise SchemaValidationError(f"{flow_id}[{index}] {label} operator is unsupported: {operator}")
     if operator not in {"exists", "missing"} and "value" not in condition and "equals" not in condition:
         raise SchemaValidationError(f"{flow_id}[{index}] {label} operator {operator} requires value")
+    if operator == "regex":
+        _validate_regex(flow_id, f"{label}.value", condition.get("value", condition.get("equals", "")))
 
 
 def _normalize_transition_targets(
@@ -441,11 +467,235 @@ def _validate_data_transform_step(flow_id: str, index: int, step: dict[str, Any]
     }
     if action not in supported:
         raise SchemaValidationError(f"{flow_id}[{index}] unsupported data_transform action: {action}")
-    if not isinstance(step.get("save_as", step.get("name")), str):
+    output_name = step.get("save_as", step.get("name"))
+    if not isinstance(output_name, str) or not output_name.strip():
         raise SchemaValidationError(f"{flow_id}[{index}] data_transform requires save_as or name")
-    if action == "regex_extract" and not isinstance(step.get("pattern"), str):
-        raise SchemaValidationError(f"{flow_id}[{index}] data_transform regex_extract requires pattern")
-    if action == "replace_at" and "index" not in step and "index_variable" not in step:
-        raise SchemaValidationError(f"{flow_id}[{index}] data_transform replace_at requires index")
+    source_actions = {
+        "copy",
+        "get",
+        "regex_extract",
+        "replace_at",
+        "increment",
+        "decrement",
+        "append",
+        "remove",
+        "length",
+        "line_match",
+        "contains",
+    }
+    if action in source_actions and not _has_transform_source(step):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform {action} requires source")
+    if action == "template" and not isinstance(step.get("template"), str):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform template requires template")
+    if action == "regex_extract":
+        if not isinstance(step.get("pattern"), str):
+            raise SchemaValidationError(f"{flow_id}[{index}] data_transform regex_extract requires pattern")
+        _validate_regex(flow_id, f"{index}.data_transform.pattern", step["pattern"])
+    if action == "replace_at":
+        if "index" not in step and "index_variable" not in step:
+            raise SchemaValidationError(f"{flow_id}[{index}] data_transform replace_at requires index")
+        if "item" not in step and "value" not in step:
+            raise SchemaValidationError(f"{flow_id}[{index}] data_transform replace_at requires item or value")
+    if action == "append" and "item" not in step and "value" not in step:
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform append requires item or value")
+    if action == "random_choice" and not isinstance(step.get("choices"), list) and not _has_transform_source(step):
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform random_choice requires choices or source")
     if action == "line_match" and not isinstance(step.get("lines"), list):
         raise SchemaValidationError(f"{flow_id}[{index}] data_transform line_match requires lines")
+    if action == "contains" and "needle" not in step and "value" not in step:
+        raise SchemaValidationError(f"{flow_id}[{index}] data_transform contains requires needle or value")
+
+
+def _has_transform_source(step: dict[str, Any]) -> bool:
+    return any(key in step for key in ("source_variable", "variable", "source", "value"))
+
+
+def _validate_buttons(flow_id: str, index: int, buttons: Any) -> None:
+    if not isinstance(buttons, list) or not buttons:
+        raise SchemaValidationError(f"{flow_id}[{index}] buttons must be a non-empty array")
+    rows = buttons if isinstance(buttons[0], list) else [buttons]
+    valid_count = 0
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, list) or not row:
+            raise SchemaValidationError(f"{flow_id}[{index}] button row {row_index} must be non-empty")
+        for button_index, button in enumerate(row):
+            label: Any
+            value: Any
+            if isinstance(button, str):
+                label = button
+                value = button
+            elif isinstance(button, dict):
+                label = button.get("text", button.get("label"))
+                value = button.get("value", button.get("callback_data", label))
+            else:
+                raise SchemaValidationError(
+                    f"{flow_id}[{index}] button {row_index}.{button_index} must be text or object"
+                )
+            if not isinstance(label, str) or not label.strip():
+                raise SchemaValidationError(f"{flow_id}[{index}] button {row_index}.{button_index} requires text")
+            if not isinstance(value, str) or not value.strip():
+                raise SchemaValidationError(f"{flow_id}[{index}] button {row_index}.{button_index} requires value")
+            encoded_length = len(value.encode("utf-8"))
+            if encoded_length > 64:
+                raise SchemaValidationError(
+                    f"{flow_id}[{index}] button {row_index}.{button_index} value exceeds Telegram 64-byte callback limit"
+                )
+            valid_count += 1
+    if valid_count == 0:
+        raise SchemaValidationError(f"{flow_id}[{index}] buttons must contain at least one button")
+
+
+def _validate_ai_chat_step(flow_id: str, index: int, step: dict[str, Any]) -> None:
+    prompt = step.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise SchemaValidationError(f"{flow_id}[{index}] ai_chat requires prompt")
+    save_as = step.get("save_as")
+    if not isinstance(save_as, str) or not save_as:
+        return
+
+    state_like_names = {
+        "board",
+        "board_state",
+        "state",
+        "game_state",
+        "score",
+        "scores",
+        "counter",
+        "count",
+        "total",
+        "winner",
+        "result",
+        "status",
+    }
+    prompt_text = prompt.lower()
+    deterministic_terms = {
+        "return only",
+        "final string",
+        "calculate",
+        "validate",
+        "update",
+        "winner",
+        "draw",
+        "score",
+        "counter",
+        "board",
+        "json",
+        "structured",
+        "state",
+    }
+    if save_as.lower() in state_like_names or any(term in prompt_text for term in deterministic_terms):
+        raise SchemaValidationError(
+            f"{flow_id}[{index}] ai_chat cannot be used for deterministic state transformation; use data_transform, condition, or database_query"
+        )
+
+
+def _validate_templates(flow_id: str, index: int, value: Any) -> None:
+    if isinstance(value, str):
+        _validate_template_string(flow_id, index, value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_templates(flow_id, index, item)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_templates(flow_id, index, item)
+
+
+def _validate_template_string(flow_id: str, index: int, text: str) -> None:
+    for match in re.finditer(r"\{\{\s*([^}]+?)\s*\}\}", text):
+        expression = match.group(1).strip()
+        if "|" not in expression:
+            continue
+        if re.fullmatch(r"[^|]+?\s*\|\s*default\(.*\)", expression) is None:
+            raise SchemaValidationError(
+                f"{flow_id}[{index}] template uses unsupported filter: {expression}"
+            )
+
+
+def _validate_regex(flow_id: str, label: str, pattern: Any) -> None:
+    if not isinstance(pattern, str):
+        raise SchemaValidationError(f"flow {flow_id} {label} must be a regex string")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise SchemaValidationError(f"flow {flow_id} {label} is invalid regex: {exc}") from exc
+
+
+def _validate_button_routes(flows: list[Any]) -> None:
+    exact_routes: set[str] = set()
+    prefix_routes: list[str] = []
+    contains_routes: list[str] = []
+    regex_routes: list[str] = []
+
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        triggers = []
+        if "trigger" in flow:
+            triggers.append(flow["trigger"])
+        if isinstance(flow.get("triggers"), list):
+            triggers.extend(flow["triggers"])
+        for trigger in triggers:
+            route = _button_route_from_trigger(trigger)
+            if route is None:
+                continue
+            match_type, value = route
+            if match_type in {"exact", "case_insensitive"}:
+                exact_routes.add(value if match_type == "exact" else value.lower())
+            elif match_type == "prefix":
+                prefix_routes.append(value)
+            elif match_type == "contains":
+                contains_routes.append(value)
+            elif match_type == "regex":
+                regex_routes.append(value)
+
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        for index, step in enumerate(flow.get("steps", [])):
+            if not isinstance(step, dict) or step.get("type") != "buttons":
+                continue
+            for value in _button_values(step.get("buttons")):
+                if "{{" in value or "}}" in value:
+                    continue
+                if (
+                    value in exact_routes
+                    or value.lower() in exact_routes
+                    or any(value.startswith(prefix) for prefix in prefix_routes)
+                    or any(fragment in value for fragment in contains_routes)
+                    or any(re.fullmatch(pattern, value) for pattern in regex_routes)
+                ):
+                    continue
+                raise SchemaValidationError(
+                    f"{flow.get('id', '<unknown>')}[{index}] button value has no callback/button route: {value}"
+                )
+
+
+def _button_route_from_trigger(trigger: Any) -> tuple[str, str] | None:
+    if not isinstance(trigger, dict):
+        return None
+    if trigger.get("type", "text") not in {"callback", "button"}:
+        return None
+    value = trigger.get("value")
+    if not isinstance(value, str) or not value:
+        return None
+    return str(trigger.get("match", "exact")), value
+
+
+def _button_values(buttons: Any) -> list[str]:
+    if not isinstance(buttons, list) or not buttons:
+        return []
+    rows = buttons if isinstance(buttons[0], list) else [buttons]
+    values: list[str] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        for button in row:
+            if isinstance(button, str):
+                values.append(button)
+            elif isinstance(button, dict):
+                value = button.get("value", button.get("callback_data", button.get("text", button.get("label"))))
+                if isinstance(value, str):
+                    values.append(value)
+    return values
