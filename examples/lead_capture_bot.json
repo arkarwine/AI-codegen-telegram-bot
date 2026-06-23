@@ -1,0 +1,19 @@
+{
+  "metadata": {
+    "name": "Lead Capture Bot"
+  },
+  "permissions": {},
+  "flows": [
+    {
+      "id": "start",
+      "trigger": "/start",
+      "steps": [
+        { "type": "message", "text": "Tell us your email." },
+        { "type": "wait_for_input", "variable": "email" },
+        { "type": "set_variable", "name": "lead_status", "value": "new" },
+        { "type": "analytics", "event_type": "lead_created" },
+        { "type": "message", "text": "Saved {{email}}. Our team will follow up." }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+[project]
+name = "telegram-ai-bot-builder"
+version = "0.1.0"
+description = "Telegram-only AI bot builder that deploys JSON-schema bots on a shared runtime engine."
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.20.0",
+    "google-genai>=1.0.0",
+    "kurigram>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

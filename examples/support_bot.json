@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "name": "Support Bot",
+    "description": "Routes customers to support or sales."
+  },
+  "permissions": {},
+  "flows": [
+    {
+      "id": "start",
+      "trigger": "/start",
+      "steps": [
+        { "type": "message", "text": "Welcome! What do you need today?" },
+        { "type": "buttons", "buttons": ["Support", "Sales"] }
+      ]
+    },
+    {
+      "id": "support",
+      "trigger": "Support",
+      "steps": [
+        { "type": "message", "text": "Please describe your issue." },
+        { "type": "wait_for_input", "variable": "issue" },
+        { "type": "analytics", "event_type": "support_request" },
+        { "type": "message", "text": "Thanks. We logged: {{issue}}" }
+      ]
+    }
+  ]
+}

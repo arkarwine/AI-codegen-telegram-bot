@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "name": "FAQ Bot"
+  },
+  "permissions": {},
+  "flows": [
+    {
+      "id": "start",
+      "trigger": "/start",
+      "steps": [
+        { "type": "buttons", "text": "Pick a topic:", "buttons": ["Hours", "Pricing"] }
+      ]
+    },
+    {
+      "id": "hours",
+      "trigger": "Hours",
+      "steps": [
+        { "type": "message", "text": "We are open Monday-Friday, 9:00-17:00." }
+      ]
+    },
+    {
+      "id": "pricing",
+      "trigger": "Pricing",
+      "steps": [
+        { "type": "message", "text": "Pricing starts at $29/month." }
+      ]
+    }
+  ]
+}

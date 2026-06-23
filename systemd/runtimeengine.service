@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram AI Bot Builder - Runtime Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/telegram-ai-bot-builder
+EnvironmentFile=/opt/telegram-ai-bot-builder/.env
+ExecStart=/opt/telegram-ai-bot-builder/.venv/bin/python runtime_engine.py
+Restart=always
+RestartSec=5
+User=botbuilder
+Group=botbuilder
+
+[Install]
+WantedBy=multi-user.target
