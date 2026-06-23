@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -91,6 +92,7 @@ class RuntimeManager:
 
     async def start_bot(self, record: BotRecord) -> None:
         from pyrogram import Client, filters
+        from pyrogram.types import BotCommand
 
         logger.info("starting bot id=%s name=%s username=%s", record.id, record.name, record.username)
         schema = normalize_bot_schema(json.loads(record.schema_json))
@@ -119,6 +121,11 @@ class RuntimeManager:
             await self.dispatcher.dispatch(record, app, callback_query)
 
         await client.start()
+        commands = _schema_bot_commands(schema)
+        if commands:
+            await client.set_bot_commands(
+                [BotCommand(command=command, description=description) for command, description in commands]
+            )
         await self.database.mark_bot_started(record.id)
         self.running[record.id] = RunningBot(
             record=record,
@@ -160,3 +167,50 @@ class RuntimeManager:
 
 def _record_signature(record: BotRecord) -> str:
     return f"{record.token}\0{record.schema_json}"
+
+
+def _schema_bot_commands(schema: dict[str, Any]) -> list[tuple[str, str]]:
+    commands: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for flow in schema.get("flows", []):
+        if not isinstance(flow, dict):
+            continue
+        for trigger in _flow_triggers(flow):
+            command = _command_from_trigger(trigger)
+            if command is None or command in seen:
+                continue
+            seen.add(command)
+            commands.append((command, _command_description(flow, command)))
+    return commands[:100]
+
+
+def _flow_triggers(flow: dict[str, Any]) -> list[Any]:
+    triggers: list[Any] = []
+    if "trigger" in flow:
+        triggers.append(flow["trigger"])
+    triggers.extend(flow.get("triggers", []))
+    return triggers
+
+
+def _command_from_trigger(trigger: Any) -> str | None:
+    value: str | None = None
+    if isinstance(trigger, str) and trigger.startswith("/"):
+        value = trigger[1:]
+    elif isinstance(trigger, dict) and trigger.get("type") == "command":
+        raw_value = trigger.get("value")
+        if isinstance(raw_value, str) and raw_value.startswith("/"):
+            value = raw_value[1:]
+    if value is None:
+        return None
+    command = value.split(maxsplit=1)[0].lower()
+    if re.fullmatch(r"[a-z0-9_]{1,32}", command) is None:
+        return None
+    return command
+
+
+def _command_description(flow: dict[str, Any], command: str) -> str:
+    description = flow.get("description") or f"Run /{command}"
+    text = str(description).strip()
+    if len(text) < 3:
+        text = f"Run /{command}"
+    return text[:256]
