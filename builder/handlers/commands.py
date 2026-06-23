@@ -10,17 +10,20 @@ from builder.services.bot_service import BuilderService
 
 
 HELP = """
-Commands:
-/createbot <name>|<token>|<prompt>
-/editbot <bot_id>|<instruction>
-/deletebot <bot_id>
+Commands
+/createbot name|token|prompt
+/editbot bot_id|instruction
+/deletebot bot_id
 /mybots
-/viewschema <bot_id>
-/enable <bot_id>
-/disable <bot_id>
-/analytics <bot_id>
-/exportschema <bot_id>
-/importschema <name>|<token>|<json>
+/viewschema bot_id
+/enable bot_id
+/disable bot_id
+/analytics bot_id
+/exportschema bot_id
+/importschema name|token|json
+
+Example
+/createbot Support Bot|123456:ABC|Create a support bot with Support and Sales buttons
 """.strip()
 
 
