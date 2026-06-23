@@ -227,7 +227,7 @@ class AiChatPlugin:
 
         client = genai.Client()
         response = client.models.generate_content(
-            model=str(config.get("model", "gemini-2.5-flash")),
+            model=str(config.get("model", "gemini-3.1-flash-lite")),
             contents=_render(str(config["prompt"]), context.session_data),
         )
         await context.message.reply_text(response.text or "")

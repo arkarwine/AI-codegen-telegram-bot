@@ -321,7 +321,7 @@ MINIMAL VALID EXAMPLE
 class AiSchemaService:
     """Creates, modifies, explains, and validates schemas without producing code."""
 
-    model = "gemini-2.5-flash"
+    model = "gemini-3.1-flash-lite"
 
     async def create_schema(self, user_prompt: str) -> dict[str, Any]:
         return await self._generate(user_prompt)
