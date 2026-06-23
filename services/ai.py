@@ -17,30 +17,26 @@ from schemas.bot_schema import (
 
 
 SCHEMA_REFINEMENT_PASSES = 3
-SCHEMA_AI_VALIDATION_REPAIRS = 1
 
 
-SCHEMA_VALIDATION_JSON_SCHEMA: dict[str, Any] = {
+PROMPT_PREPARATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["valid", "issues", "summary"],
+    "required": [
+        "prepared_prompt",
+        "original_goal",
+        "must_have_features",
+        "telegram_ux_plan",
+        "data_plan",
+        "quality_bar",
+    ],
     "properties": {
-        "valid": {"type": "boolean"},
-        "summary": {"type": "string"},
-        "issues": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["severity", "path", "message", "repair_hint"],
-                "properties": {
-                    "severity": {"type": "string", "enum": ["error", "warning"]},
-                    "path": {"type": "string"},
-                    "message": {"type": "string"},
-                    "repair_hint": {"type": "string"},
-                },
-            },
-        },
+        "prepared_prompt": {"type": "string"},
+        "original_goal": {"type": "string"},
+        "must_have_features": {"type": "array", "items": {"type": "string"}},
+        "telegram_ux_plan": {"type": "array", "items": {"type": "string"}},
+        "data_plan": {"type": "array", "items": {"type": "string"}},
+        "quality_bar": {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -181,37 +177,45 @@ Refinement task:
 """.strip()
 
 
-SCHEMA_VALIDATION_SYSTEM_PROMPT = """
-You are a strict Telegram bot schema reviewer, not a generator.
-Return exactly one JSON validation report matching the requested response schema.
-No prose, markdown, code, or schema rewrite.
+PROMPT_PREPARATION_SYSTEM_PROMPT = """
+Return exactly one JSON object matching the prompt-preparation response schema.
+No prose, markdown, code fences, or bot schema JSON.
 
-Mark valid=false for any blocking issue. Be strict but practical.
+Rewrite the user's raw request into a complete AI-ready production brief for a
+Telegram bot schema generator. Preserve the user's real goal and domain, but
+expand short or vague prompts into a complete, well-rounded product brief.
 
-Blocking issues:
-- The schema is not clearly a Telegram bot schema or does not honor the original
-  user request.
-- It is incomplete, placeholder-like, demo-like, or claims capabilities the
-  schema does not actually implement.
-- It relies on plain text where Telegram callback buttons would be the natural
-  UX for finite choices.
-- Button callback values do not have matching callback/text/button triggers.
-- Callback groups are not represented with prefix triggers when values vary.
-- Flow/step transitions are missing, dead, ambiguous, or point to wrong scopes.
-- It uses ai_chat for deterministic state, validation, scoring, parsing,
-  counters, game rules, database mutation, math, or structured state updates.
-- It promises persistence, stats, tickets, bookings, leads, profiles, admin
-  review, or history without database_query steps.
-- It misses confirmations, fallback paths, restart/back paths, analytics, or
-  admin guards where a production Telegram bot would need them.
-- It uses unsupported plugins, executable code, SQL strings, shell commands,
-  Python/JavaScript snippets, eval, or any behavior outside declarative JSON.
-- It contains unsupported template filters, malformed conditions, underdefined
-  data_transform steps, invalid trigger semantics, or invalid Telegram callback
-  data.
+The prepared prompt must:
+- Explicitly say this is for a Telegram bot.
+- Describe the target users, primary workflow, menu structure, callback-button
+  UX, persistence needs, admin needs, analytics events, error/fallback paths,
+  and completion criteria.
+- Prefer Telegram-native controls: commands, inline callback buttons, edited
+  messages, admin guards, scheduler, broadcast, analytics, database_query,
+  variables, conditions, and data_transform.
+- Include realistic production details the user omitted, while staying faithful
+  to the user's goal.
+- Forbid generated code, SQL, shell commands, eval, and unsupported plugins.
+- Forbid ai_chat for deterministic state, parsing, scoring, validation, math,
+  counters, or structured updates.
+""".strip()
 
-Warnings are allowed only for polish improvements that do not block deployment.
-For each issue, include a precise JSON path and an actionable repair_hint.
+
+SCHEMA_FIX_SYSTEM_PROMPT = f"""
+{SCHEMA_SYSTEM_PROMPT}
+
+Fix-layer task:
+- Validate and fix the provided Telegram bot schema in this same response.
+- Return the entire fixed schema JSON object directly.
+- Do not return a validation report, patch, prose, markdown, or explanation.
+- If the schema is already good, return a lightly improved equivalent schema.
+- Preserve the prepared prompt's goal and domain.
+- Remove placeholders, broken routes, fake persistence, unsupported template
+  filters, unsupported actions, unroutable buttons, and dead transitions.
+- Use callback/button triggers for every finite-choice button value.
+- Use data_transform, condition, variables, and database_query for deterministic
+  state. Do not use ai_chat for deterministic state or structured logic.
+- Keep the final schema deployable by the runtime contract.
 """.strip()
 
 
@@ -250,26 +254,43 @@ class AiSchemaService:
         from google.genai import types
 
         client = genai.Client()
+        prepared_contents = contents
         try:
+            prepared_contents = await self._prepare_generation_prompt(client, types, contents)
             data = await self._generate_valid_schema(
                 client=client,
                 types=types,
-                contents=contents,
+                contents=prepared_contents,
                 system_instruction=SCHEMA_SYSTEM_PROMPT,
-                repair_original=contents,
+                repair_original=prepared_contents,
             )
             if refine:
-                data = await self._refine_schema(client, types, contents, data)
-            data = await self._ai_validate_schema(client, types, contents, data)
+                data = await self._refine_schema(client, types, prepared_contents, data)
+            data = await self._ai_fix_schema(client, types, prepared_contents, data)
             return data
         except (JSONDecodeError, SchemaValidationError, ValueError) as exc:
             validation_error: Exception = exc
 
         if allow_fallback:
-            fallback = _fallback_schema(contents)
+            fallback = _fallback_schema(prepared_contents)
             validate_bot_schema(fallback)
             return fallback
         raise ValueError(f"Gemini returned an invalid bot schema: {validation_error}") from validation_error
+
+    async def _prepare_generation_prompt(self, client: Any, types: Any, contents: str) -> str:
+        response = client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=PROMPT_PREPARATION_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_json_schema=PROMPT_PREPARATION_JSON_SCHEMA,
+            ),
+        )
+        parsed = json.loads(response.text or "{}")
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("prepared_prompt"), str):
+            raise ValueError("Gemini prompt preparation returned malformed JSON")
+        return _prepared_prompt_payload(contents, parsed)
 
     async def _generate_valid_schema(
         self,
@@ -328,36 +349,28 @@ class AiSchemaService:
                 continue
         return refined
 
-    async def _ai_validate_schema(
+    async def _ai_fix_schema(
         self,
         client: Any,
         types: Any,
-        original_contents: str,
+        prepared_contents: str,
         schema: dict[str, Any],
     ) -> dict[str, Any]:
-        current_schema = schema
-        for attempt in range(SCHEMA_AI_VALIDATION_REPAIRS + 1):
-            report = await _ai_schema_validation_report(
-                client=client,
-                types=types,
-                model=self.model,
-                original_contents=original_contents,
-                schema=current_schema,
-            )
-            if _ai_validation_passed(report):
-                validate_bot_schema(current_schema)
-                return current_schema
-            if attempt >= SCHEMA_AI_VALIDATION_REPAIRS:
-                raise ValueError(f"AI schema validation failed: {_ai_validation_issues_text(report)}")
-            repair_contents = _ai_validation_repair_prompt(original_contents, current_schema, report)
-            current_schema = await self._generate_valid_schema(
-                client=client,
-                types=types,
-                contents=repair_contents,
-                system_instruction=SCHEMA_REFINEMENT_SYSTEM_PROMPT,
-                repair_original=repair_contents,
-            )
-        return current_schema
+        response = client.models.generate_content(
+            model=self.model,
+            contents=_schema_fix_prompt(prepared_contents, schema),
+            config=types.GenerateContentConfig(
+                system_instruction=SCHEMA_FIX_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_json_schema=BOT_SCHEMA_JSON_SCHEMA,
+            ),
+        )
+        parsed = json.loads(response.text or "{}")
+        if not isinstance(parsed, dict):
+            raise ValueError("AI schema fix layer returned a non-object schema")
+        fixed = normalize_bot_schema(parsed)
+        validate_bot_schema(fixed)
+        return fixed
 
 
 def _repair_prompt(
@@ -397,103 +410,48 @@ def _repair_prompt(
     )
 
 
-async def _ai_schema_validation_report(
-    client: Any,
-    types: Any,
-    model: str,
-    original_contents: str,
-    schema: dict[str, Any],
-) -> dict[str, Any]:
-    response = client.models.generate_content(
-        model=model,
-        contents=_schema_validation_prompt(original_contents, schema),
-        config=types.GenerateContentConfig(
-            system_instruction=SCHEMA_VALIDATION_SYSTEM_PROMPT,
-            response_mime_type="application/json",
-            response_json_schema=SCHEMA_VALIDATION_JSON_SCHEMA,
-        ),
-    )
-    parsed = json.loads(response.text or "{}")
-    if not isinstance(parsed, dict):
-        raise ValueError("AI schema validator returned a non-object report")
-    issues = parsed.get("issues")
-    if not isinstance(parsed.get("valid"), bool) or not isinstance(issues, list):
-        raise ValueError("AI schema validator returned malformed report")
-    return parsed
-
-
-def _schema_validation_prompt(original_contents: str, schema: dict[str, Any]) -> str:
+def _prepared_prompt_payload(original_contents: str, prepared: dict[str, Any]) -> str:
     return json.dumps(
         {
-            "task": "Validate this generated Telegram bot schema against the original request and runtime semantics.",
+            "task": "Generate a complete production-grade Telegram bot schema from this prepared brief.",
             "original_user_prompt_or_request": original_contents,
-            "schema_to_review": schema,
-            "runtime_contract_summary": [
-                "Only declarative JSON steps are allowed; no generated code or shell execution.",
-                "Supported templates are plain {{path}} lookups and {{path | default('fallback')}} only.",
-                "Inline keyboard callback_data must be 1-64 UTF-8 bytes and should match callback/button/text triggers.",
-                "Use data_transform, condition, set_variable, get_variable, and database_query for deterministic state.",
-                "Use ai_chat only for conversational language generation, explanations, and non-deterministic helper text.",
-                "Use database_query for persistent leads, bookings, tickets, stats, profiles, scores, and admin records.",
-                "Use admin_only before broadcast or sensitive admin operations.",
-            ],
-            "decision_rules": [
-                "Set valid=false if a production Telegram user would hit a broken path.",
-                "Set valid=false if a short prompt was not expanded into a complete useful bot.",
-                "Set valid=false if the schema says it does something but only sends placeholder text.",
-                "Set valid=true only when the schema is deployable, faithful, complete, Telegram-native, and semantically consistent.",
+            "prepared_production_brief": prepared,
+            "schema_generation_instructions": [
+                "Return only the complete bot schema JSON object.",
+                "Build the full Telegram bot implied by the prepared brief.",
+                "Use callback buttons for finite choices and matching callback/button triggers.",
+                "Use database_query for persistent business data.",
+                "Use data_transform and conditions for deterministic state and validation.",
+                "Do not generate code or unsupported actions.",
             ],
         },
         ensure_ascii=False,
     )
 
 
-def _ai_validation_repair_prompt(
-    original_contents: str,
+def _schema_fix_prompt(
+    prepared_contents: str,
     schema: dict[str, Any],
-    report: dict[str, Any],
 ) -> str:
     return json.dumps(
         {
-            "task": "Repair the schema using the AI validation report. Return only the complete corrected Telegram bot schema JSON object.",
-            "original_user_prompt_or_request": original_contents,
-            "schema_to_repair": schema,
-            "validation_report": report,
-            "repair_rules": [
-                "Keep faith with the original user request and domain.",
-                "Fix every error-level issue from the report.",
-                "Preserve working behavior when possible.",
-                "Use versatile supported schema actions, not use-case-specific fake features.",
+            "task": "Validate, fix, and finalize this Telegram bot schema in one response.",
+            "prepared_prompt_payload": prepared_contents,
+            "schema_to_fix": schema,
+            "fix_requirements": [
+                "Return only the complete fixed schema JSON object.",
+                "Keep the original goal and prepared brief intact.",
+                "Fix broken callback routing, missing triggers, bad transitions, unsupported filters, and underdefined steps.",
+                "Replace placeholder behavior with deployable schema behavior.",
+                "Use database_query for promised or expected persistence.",
+                "Use data_transform, condition, variables, and database_query for deterministic logic.",
                 "Do not use ai_chat for deterministic state transformations.",
-                "Prefer Telegram callbacks/buttons for finite choices.",
-                "Persist real records with database_query where persistence is promised or expected.",
-                "Return only valid JSON matching the bot schema contract.",
+                "Use Telegram buttons/callbacks heavily for finite-choice UX.",
+                "Keep all callback values within Telegram limits.",
             ],
         },
         ensure_ascii=False,
     )
-
-
-def _ai_validation_passed(report: dict[str, Any]) -> bool:
-    if not report.get("valid"):
-        return False
-    issues = report.get("issues", [])
-    return not any(isinstance(issue, dict) and issue.get("severity") == "error" for issue in issues)
-
-
-def _ai_validation_issues_text(report: dict[str, Any]) -> str:
-    issues = report.get("issues", [])
-    if not isinstance(issues, list) or not issues:
-        return str(report.get("summary", "unknown AI validation failure"))
-    parts: list[str] = []
-    for issue in issues[:8]:
-        if not isinstance(issue, dict):
-            continue
-        path = str(issue.get("path", "$"))
-        message = str(issue.get("message", "invalid schema"))
-        hint = str(issue.get("repair_hint", "")).strip()
-        parts.append(f"{path}: {message}" + (f" ({hint})" if hint else ""))
-    return "; ".join(parts) or str(report.get("summary", "unknown AI validation failure"))
 
 
 def _refinement_pass_count() -> int:
